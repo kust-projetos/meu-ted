@@ -38,6 +38,7 @@ const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 const EXPENSE_REAL = process.env.P2D_EXPENSE_REAL === "1";
+const FINANCE_INTERPRETATION_REAL = process.env.P2D_FINANCE_INTERPRETATION_REAL === "1";
 // P3 proposal slices: gateway + Pending V2 + scripted propose_expense
 // (P3.1), propose_income (P3.2), propose_transfer (P3.3), propose_card_purchase
 // 1x (P3.4) or with installments (P3.5). They reuse the synthetic stack and
@@ -50,7 +51,7 @@ const TRANSFER = process.env.P2D_TRANSFER === "1";
 const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
 const P3_PILOT = process.env.P2D_P3_PILOT === "1";
 const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
-if (EXPENSE_REAL && (!LIVE_REAL || P3_PILOT || P38_CARD_SMOKE || [EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].some(Boolean))) {
+if ((EXPENSE_REAL || FINANCE_INTERPRETATION_REAL) && (!LIVE_REAL || P3_PILOT || P38_CARD_SMOKE || (EXPENSE_REAL && FINANCE_INTERPRETATION_REAL) || [EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].some(Boolean))) {
   throw new Error("P2D_EXPENSE_REAL requires P2D_LIVE_REAL and is exclusive with other P2D expense slices");
 }
 if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, P38_CARD_SMOKE].some(Boolean))) {
@@ -77,6 +78,8 @@ const P2D_SPEC = LIVE_PREP
       : LIVE_REAL
         ? EXPENSE_REAL
           ? "**/p2d/p3-expense-real.spec.ts"
+          : FINANCE_INTERPRETATION_REAL
+            ? "**/p2d/p4-interpretation-real.spec.ts"
           : P3_PILOT
           ? "**/p2d/p3-integrated-real.spec.ts"
           : P38_CARD_SMOKE
@@ -122,6 +125,7 @@ if (P2D_LIVE_MODE) {
   if (LIVE_REAL && P3_PILOT) clean.P2D_P3_PILOT = "1";
   if (LIVE_REAL && P38_CARD_SMOKE) clean.P2D_P38_CARD_SMOKE = "1";
   if (LIVE_REAL && EXPENSE_REAL) clean.P2D_EXPENSE_REAL = "1";
+  if (LIVE_REAL && FINANCE_INTERPRETATION_REAL) clean.P2D_FINANCE_INTERPRETATION_REAL = "1";
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, clean);
 }
