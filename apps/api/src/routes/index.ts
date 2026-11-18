@@ -74,6 +74,7 @@ import { createInMemoryPriceAlertStore, type PriceAlertStore } from "../price-al
 import { isPriceAlertsEnabled, registerPriceAlertRoutes } from "./price-alerts.js";
 import { registerAgentAuthRoutes } from "./agent-auth.js";
 import { registerAgentAutoExecTokenRoutes } from "./agent-autoexec-token.js";
+import { registerAgentCategoryAutoExecTokenRoutes } from "./agent-category-autoexec-token.js";
 import { registerAgentPendingTokenRoutes } from "./agent-pending-token.js";
 import { registerWorkspaceAliasRoutes } from "../auth/workspace-alias.js";
 import { requireApprovalToolContract } from "../approvals/tool-registry.js";
@@ -111,6 +112,7 @@ export type RouteDeps = {
   shadowDivergenceStore?: ShadowDivergenceStore;
   delegationSecret?: string;
   autoExecMintServiceToken?: string | undefined;
+  categoryAutoExecMintServiceToken?: string | undefined;
   pendingMintServiceToken?: string | undefined;
   vapidPublicKey?: string;
   auditLogs?: AuditLogStore;
@@ -815,6 +817,12 @@ export const registerRoutes = (app: FastifyInstance, deps: RouteDeps): void => {
   });
   registerAgentAutoExecTokenRoutes(app, {
     autoExecMintServiceToken: deps.autoExecMintServiceToken,
+    delegationSecret: deps.delegationSecret ?? process.env.PI_DELEGATED_TOKEN_SECRET,
+    workspaceAccess: deps.workspaceAccess,
+    pool: deps.pool ?? null,
+  });
+  registerAgentCategoryAutoExecTokenRoutes(app, {
+    categoryAutoExecMintServiceToken: deps.categoryAutoExecMintServiceToken,
     delegationSecret: deps.delegationSecret ?? process.env.PI_DELEGATED_TOKEN_SECRET,
     workspaceAccess: deps.workspaceAccess,
     pool: deps.pool ?? null,
