@@ -72,3 +72,13 @@ produção `79d8b09` permanece inalterado.
 - Verificar o erro do broker de propostas na 2ª execução P5, observado como
   “Não foi possível preparar a proposta de despesa”; o `code` do gateway ainda
   não foi capturado.
+
+## Encerramento da missão de homologação (2026-11-18)
+
+**Fase 0 (prontidão gratuita): falhou.** O coordenador P2D em modo sintético (`P2D_BROWSER=1`) parou no log `[p2d-stack] root=...`; nenhuma das quatro portas abriu em 240 s: API 4110, coordenador 3200, gateway 3221 e Next 3201 — todas sem resposta. O log do coordenador tinha 87 bytes (apenas `root=...`); o log do Next estava vazio (0 bytes). Portas liberadas ao final (`PORTS_RELEASED=True`).
+
+**F0.1 (diagnóstico direcionado):** o trecho `root=` → `api=` em `apps/pwa/e2e/support/p2d-browser-stack.mts:166-384` é idêntico nos modos `P2D_BROWSER` e `P2D_LIVE_REAL`; a credencial real não é carregada nesse trecho. `createBetterAuth` (`apps/api/src/auth/better-auth.ts:39-86`) e `buildTestApp` (`apps/api/tests/test-app.ts:137-337`) são síncronos, sem banco/rede/arquivo. Hipóteses não verificadas: `EADDRINUSE` por órfão na 4110, plugin Fastify assíncrono em `await app.listen()` (`:383`, sem timeout), ou log truncado. Host limpo ao final (sem listeners/órfãos), mas isso não prova o estado na execução que falhou. **CAUSA INDETERMINADA**; observação que falta: stderr completo do `webServer` da execução falha.
+
+**Decisão do orientador:** encerrar a missão de homologação com bloqueio de infraestrutura documentado. Sem novas tentativas, sem chamadas pagas, sem declarar infraestrutura corrigida nem P5 aprovado. Instrumentação de `/propose` e `/active` preservada (PR #430, validada 3/3) para futura investigação.
+
+**Estado final:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**; prontidão das quatro portas não comprovada; baseline de produção `79d8b09` inalterado; nenhuma flag ativada; nenhum deploy. Próxima retomada exige primeiro diagnóstico confiável da inicialização P2D e comprovação de prontidão de API/coordenador/gateway/Next antes de qualquer nova execução com LLM real.
