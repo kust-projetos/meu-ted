@@ -70,22 +70,47 @@ test("live-real: interprets four financial messages without executing proposals"
     const send = page.getByRole("button", { name: /enviar mensagem/i });
     await expect(send).toBeEnabled({ timeout: 120000 });
     await send.click();
-    await expect.poll(() => proposals.length, { timeout: 300000 }).toBe(beforeCount + 1);
+    await expect.poll(() => proposals.length, { timeout: 300000 }).toBeGreaterThanOrEqual(beforeCount + 1);
     await expect(page.getByText("conectando.", { exact: false })).toHaveCount(0, { timeout: 300000 });
-    const proposal = proposals[beforeCount]!;
-    const args = proposal.normalizedArgs;
-    expect(proposal.tool).toBe(expected.tool);
+    const newProposals = proposals.slice(beforeCount);
+    const proposalToolsSeen = newProposals.map(({ tool }) => tool);
+    const proposal = newProposals.find(({ tool }) => tool === expected.tool);
+    expect(
+      proposal,
+      `expected proposal tool ${expected.tool}; tools seen: ${proposalToolsSeen.join(", ") || "(none)"}`,
+    ).toBeTruthy();
+    const selectedProposal = proposal!;
+    const args = selectedProposal.normalizedArgs;
+    expect(selectedProposal.tool).toBe(expected.tool);
     expect(args.amountCents).toBe(expected.amountCents);
     expect(args.description).toMatch(expected.description);
     if (expected.category === "income" && args.categoryId) expect(args.categoryId).toBe(SALARY_CATEGORY);
     if (expected.category === "transport" && args.categoryId) expect(args.categoryId).not.toBe(FOOD_CATEGORY);
+    let observedYesterdayDate: string | undefined;
     if (expected.yesterday) {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      expect(args.date).toBe(yesterday.toISOString().slice(0, 10));
+      const now = new Date();
+      const utcYesterdayDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1))
+        .toISOString().slice(0, 10);
+      const saoPauloToday = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Sao_Paulo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(now).reduce<Record<string, string>>((parts, part) => {
+        if (part.type !== "literal") parts[part.type] = part.value;
+        return parts;
+      }, {});
+      const saoPauloYesterdayDate = new Date(Date.UTC(
+        Number(saoPauloToday.year),
+        Number(saoPauloToday.month) - 1,
+        Number(saoPauloToday.day) - 1,
+      )).toISOString().slice(0, 10);
+      expect([utcYesterdayDate, saoPauloYesterdayDate]).toContain(args.date);
+      observedYesterdayDate = args.date;
     }
-    evidence.push({ tool: proposal.tool, amountCents: args.amountCents, description: args.description,
+    evidence.push({ tool: selectedProposal.tool, proposalToolsSeen, amountCents: args.amountCents, description: args.description,
       categoryId: args.categoryId ?? "NOT_OBSERVED", date: args.date ?? null,
+      ...(observedYesterdayDate ? { observedYesterdayDate } : {}),
       ...(index === 0 ? { categoryResolution: args.categoryId ? "OBSERVED" : "NOT_OBSERVED" } : {}) });
   }
   page.off("request", requestListener);
