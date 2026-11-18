@@ -70,8 +70,8 @@ Estado final confirmado:
 - Bucket R2 `pi-finance-ted-attachments` e namespace/DO preservados por
   decisão do operador.
 
-O endpoint `pi-finance-agent.walissonead.workers.dev` retorna 404 (Worker
-removido). `apps/ted-runtime` é o gateway único runtime conversacional.
+O endpoint do Worker A0 removido retorna 404. `apps/ted-runtime` é o gateway
+único runtime conversacional.
 
 ## Gate humano
 

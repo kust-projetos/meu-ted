@@ -47,8 +47,7 @@ atestação.
 - PWA: `gh workflow run "PWA Deploy"` run 44216692235 — gate + deploy + smoke
   + attestation todos success; `/api/build-info` gitSha `79d8b092...`.
 - Verificação pós-corte: PWA 200, API /health 200 com gitSha 79d8b09,
-  gateway 404 em rota desconhecida (up), A0
-  `pi-finance-agent.walissonead.workers.dev` 404 (Worker removido).
+  gateway 404 em rota desconhecida (up), endpoint do Worker A0 removido 404.
 - Descomissionamento: Worker Cloudflare `pi-finance-agent` removido
   (`wrangler delete`), secrets apagados junto; bucket R2
   `pi-finance-ted-attachments` e namespace/DO preservados por decisão do
