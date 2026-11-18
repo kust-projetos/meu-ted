@@ -35,8 +35,33 @@ Consequência: correção para R$55, decisão `succeeded`, receipt, transação 
 
 ## Pendências verificáveis (sem causa atribuída)
 
-- Falha na listagem `/pending-operations/active` no harness (banner "Não foi possível carregar as aprovações agora."), observada nas execuções, sem causa atribuída.
-- Indisponibilidade do gateway/provider observada na 2ª execução do P5 ("TED indisponível", "Falha no envio", "Não foi possível preparar a proposta de despesa"), sem causa atribuída.
+- `/pending-operations/active` respondeu 200 em todas as 9 requisições do harness sintético, sem `code` de erro. O banner "Não foi possível carregar as aprovações agora." não se reproduziu no sintético.
+- `/pending-operations/propose` respondeu 200 nas 2 requisições do trace sintético, sem `code`. A spec sintética `p3-expense.spec.ts` passou (proposta → confirmação → 1 transação).
+- Diagnóstico de código identificou, com alta confiança, que na 2ª execução do P5 em live-real o chat devolveu uma proposta e a falha ocorreu no POST `.../rpc/pending-operations/propose` (`TedChat.tsx:882-890`, `agent-client.ts:1483-1513`), não no provider/modelo. O `code` do gateway (`pending.upstream_<status>_mint` ou `_propose`, `pending-client.mjs:39-50`) não foi gravado em nenhum artefato da execução live-real.
+- **Bloqueio verificável:** sem captura do status/`code` da resposta de `/propose` e `/active` em live-real, a causa raiz das falhas do P5 em live-real permanece indeterminada. Essa captura exigiria execução com LLM real, não autorizada nesta missão. Não repetir tentativas sem mudança concreta.
+
+## Estabilização operacional — evidências (sem LLM paga)
+
+- Trace nativo do Playwright no harness sintético: GET `/pending-operations/active` ×9, status 200, sem `code` de erro. O banner "Não foi possível carregar as aprovações agora." não se reproduziu no sintético.
+- O mesmo trace: POST `/pending-operations/propose` ×2, status 200, sem `code`. A spec sintética `p3-expense.spec.ts` passou (proposta → confirmação → 1 transação).
+- O diagnóstico de código da 2ª execução do P5 em live-real indica, com alta confiança, que o chat devolveu uma proposta e a falha ocorreu em `POST .../rpc/pending-operations/propose` (`TedChat.tsx:882-890`, `agent-client.ts:1483-1513`), não no provider/modelo. O `code` do gateway (`pending.upstream_<status>_mint` ou `_propose`, `pending-client.mjs:39-50`) não foi gravado em nenhum artefato dessa execução.
+- Sem a captura do status/`code` de `/propose` e `/active` em live-real — que exigiria execução com LLM real, não autorizada nesta missão — a causa raiz das falhas do P5 em live-real permanece indeterminada. Este é um bloqueio verificável; não atribuir causa e não repetir tentativas sem mudança concreta.
+
+### Testes determinísticos (execução serial, paralelismo zero)
+
+As suítes foram executadas uma por vez para eliminar flake de concorrência:
+
+- `pnpm --dir apps/ted-runtime test`: 417 passaram / 1 falhou. Falha isolada em `native-model-selection.test.mjs:71`: `ServiceUnavailableError: Location plugins did not finish activating`, intermitente e fora das capacidades desta missão.
+- `pnpm --dir apps/api exec vitest run tests/approvals/pending-v2-authorize-route.test.ts`: 17/17.
+- `pnpm --dir apps/api exec vitest run tests/approvals/pending-v2-supersede.test.ts tests/approvals/pending-v2-idempotency.test.ts tests/approvals/pending-v2-claim.test.ts tests/approvals/pending-v2-uncertainty.test.ts tests/approvals/pending-v2-transaction-description.test.ts`: 40/40 — confirma supersede/merge, idempotência, claim/ownership, incerteza e descrição/transação.
+- `pnpm --dir apps/pwa exec vitest run src/lib/api/agent-client.test.ts`: INCONCLUSIVO por infraestrutura do pool Vitest (`Timeout waiting for worker to respond`); nenhum teste executado.
+- Com concorrência, as mesmas suítes haviam falhado por timeouts/SIGKILL; com paralelismo zero voltaram a passar. Registrar como instabilidade do runner, não como regressão funcional demonstrada.
+
+### Telemetria, homologação e estado
+
+- O probe descarta dados de uso por design (`p2d-synthetic-read-probe.mjs:987`); nenhum dado de custo/tokens foi fornecido pelo provider: `NOT_OBSERVED`. Não criar infraestrutura nova de telemetria.
+- Plano de homologação em `docs/plans/2026-11-18-ted-financial-intelligence-v2.1/HOMOLOGATION.md` (PR #428), com cenário único, resultados esperados e condições de parada. Nenhuma execução com LLM real foi feita nesta missão de estabilização.
+- Baseline de produção `79d8b09` inalterado; nenhuma flag ativada, nenhum deploy e nenhuma chamada paga.
 
 Nenhuma chamada paga à LLM foi executada após a decisão de encerramento do orientador.
 
