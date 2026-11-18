@@ -10,10 +10,10 @@
 ## Ordem de publicação
 
 1. **API** - EXECUTADO: wrapper `scripts/ops/api-release-20260930.sh`, lane source-build, CI run `44330661848`; backup `pre-90ec37f-20261118` (sha256 `f3dc4886165fd8b03f4a929c08286f5ad59a6adbfb7453449b77bb7ddef5d48a`); rollback tag `pi-finance-api:rollback-pre-9dc5d1c`; `/ready`=200.
-2. **Gateway `ted-runtime`** - EXECUTADO: rollback tag `ted-runtime:rollback-pre-9dc5d1c`; config regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token de autoexecução provisionado fora do repositório; health healthy e `/pending-operations/active` responde 401 de autenticação.
+2. **Gateway `ted-runtime`** - EXECUTADO: rollback tag `ted-runtime:rollback-pre-9dc5d1c`; config regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token dedicado de categoria provisionado fora do repositório, mas flag efetiva de autoexecução = 0; health healthy e a rota pending retorna 401 sem sessão.
 3. **PWA** - EXECUTADO: workflow `PWA Deploy` run `44336496351`, gate, deploy, smoke e attestation success; `/api/build-info` confirma gitSha `9dc5d1c...`.
 4. **Smoke** — EXECUTADO: pós-corte PWA 200, API /health 200 com gitSha
-   79d8b09, gateway up (404 em rota desconhecida).
+   9dc5d1c, gateway up (404 em rota desconhecida).
 
 ## Configuração
 
@@ -51,9 +51,9 @@ neste plano. Nunca registrar valores de segredo no repositório:
 ## Rollback
 
 Versões/tag de rollback preservadas: API
-`pi-finance-api:rollback-pre-79d8b09`, gateway
-`ted-runtime:rollback-pre-79d8b09`; backup de config
-`opencode.json.bak-pre-79d8b09`. Em caso de falha, republicar versões
+`pi-finance-api:rollback-pre-9dc5d1c`, gateway
+`ted-runtime:rollback-pre-9dc5d1c`; backup de config
+`opencode.json.bak-pre-9dc5d1c`. As referências `pre-79d8b09` são históricas, do baseline anterior ao deploy V2.1. Em caso de falha, republicar versões
 anteriores na ordem inversa à publicação. Não restaurar A0 como serviço
 permanente. Preservar dados e ledger; não apagar nem reverter dados financeiros
 como parte do rollback.
@@ -77,12 +77,16 @@ decisão do operador.
 
 ## Atualização V2.1 (2026-11-18)
 
-O operador autorizou explicitamente **“Publicar e ativar capacidades novas”**.
 PR #435 (`fix(gateway): inject category autoexec mint token into compose`) foi
-mesclado antes do deploy. `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` e
-`PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`; autoexecução de `categories.create`
-está ativa. `TED_RISK_BASED_AUTOEXECUTE=on` é valor pré-existente, não alterado.
-A homologação integral com LLM real (P5) permanece **INCONCLUSIVE**; ativação
-em produção ocorreu por decisão explícita do operador, sem homologação prévia,
-com risco assumido. Detalhes em
+mesclado antes do deploy. O token dedicado foi provisionado, mas
+`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` efetivo; portanto, não existe cliente
+de autoexecução no gateway e `categories.create` autoexec não está ativa.
+`PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`; `TED_RISK_BASED_AUTOEXECUTE=on` na
+API é valor preexistente. A homologação integral com LLM real (P5) permanece
+**INCONCLUSIVE**. Detalhes em
 `../2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md`.
+
+**Nota operacional:** o gateway teve 14 falhas de boot com
+`writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work`;
+o 15º boot sucedeu após substituição do config stale. Um redeploy que altere
+config gerada pode repetir a falha.

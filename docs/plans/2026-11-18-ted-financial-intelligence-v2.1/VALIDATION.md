@@ -69,11 +69,11 @@ As suítes foram executadas uma por vez para eliminar flake de concorrência:
 
 - O probe descarta dados de uso por design (`p2d-synthetic-read-probe.mjs:987`); nenhum dado de custo/tokens foi fornecido pelo provider: `NOT_OBSERVED`. Não criar infraestrutura nova de telemetria.
 - Plano de homologação em `docs/plans/2026-11-18-ted-financial-intelligence-v2.1/HOMOLOGATION.md` (PR #428), com cenário único, resultados esperados e condições de parada. Nenhuma execução com LLM real foi feita nesta missão de estabilização.
-- Baseline de produção `79d8b09` inalterado; nenhuma flag ativada, nenhum deploy e nenhuma chamada paga.
+- Registro da missão de estabilização anterior ao deploy: naquele momento, baseline `79d8b09` inalterado; nenhuma flag ativada, nenhum deploy e nenhuma chamada paga. Estado posterior observado consta na seção de deploy abaixo.
 
 Nenhuma chamada paga à LLM foi executada após a decisão de encerramento do orientador.
 
-**Financial Intelligence V2.1 — DESENVOLVIMENTO CONCLUÍDO; HOMOLOGAÇÃO E ATIVAÇÃO EM PRODUÇÃO PENDENTES.**
+**Financial Intelligence V2.1 — desenvolvimento concluído; homologação integral INCONCLUSIVE.**
 
 A próxima prioridade é homologação operacional em ambiente controlado, com habilitação condicionada a evidência integrada com LLM real e autorização específica do operador.
 
@@ -84,7 +84,7 @@ A próxima prioridade é homologação operacional em ambiente controlado, com h
 
 ## Flags desativadas e habilitação controlada futura
 
-Produção permanece em `79d8b09`; `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` continua 0 em produção; `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` não foi provisionado em produção; `TED_RISK_BASED_AUTOEXECUTE` segue off; `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1` aplicam-se ao stack sintético.
+No estado observado em produção em 2026-11-18, API/PWA executam código no SHA `9dc5d1c` (main `6a0d9b4`, um commit somente de documentação à frente; paridade de código). `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; o token dedicado de categoria está provisionado (`TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN`), mas o gateway não cria cliente de autoexecução enquanto a flag estiver 0. `TED_RISK_BASED_AUTOEXECUTE=on` é valor preexistente da API. `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1` estão efetivos em produção.
 
 Habilitação futura deve: provisionar o token dedicado fora do repo, exigir dono da conversa (pin B), manter a política server-side da API e NUNCA ativar autoexecução de movimentações financeiras.
 
@@ -96,7 +96,7 @@ Habilitação futura deve: provisionar o token dedicado fora do repo, exigir don
 
 **Decisão do orientador:** encerrar a missão de homologação com bloqueio de infraestrutura documentado. Sem novas tentativas, sem chamadas pagas, sem declarar infraestrutura corrigida nem P5 aprovado. Instrumentação de `/propose` e `/active` preservada (PR #430, validada 3/3) para futura investigação.
 
-**Estado da homologação:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**. A homologação integral com LLM real permanece INCONCLUSIVE. Apesar disso, após decisão explícita do operador, houve ativação em produção sem homologação prévia; esse risco foi assumido e está documentado. O timeout/inicialização P2D e a jornada P5 não foram declarados resolvidos.
+**Estado da homologação:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**. O timeout/inicialização P2D e a jornada P5 não foram declarados resolvidos. A configuração efetiva pós-deploy é documentada abaixo; não se declara ativação de autoexecução de categoria.
 
 ## Deploy de produção V2.1 (2026-11-18)
 
@@ -104,8 +104,54 @@ O operador autorizou explicitamente **“Publicar e ativar capacidades novas”*
 
 - **Baseline de produção:** `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior `79d8b09`).
 - **API:** wrapper `scripts/ops/api-release-20260930.sh`, lane source-build, CI run `44330661848`; backup `pre-90ec37f-20261118` (sha256 `f3dc4886165fd8b03f4a929c08286f5ad59a6adbfb7453449b77bb7ddef5d48a`); rollback tag `pi-finance-api:rollback-pre-9dc5d1c`. Health ao vivo `{"status":"ok","gitSha":"9dc5d1c...","buildId":"44330661848"}` e `/ready`=200.
-- **Gateway ted-runtime:** rollback tag `ted-runtime:rollback-pre-9dc5d1c`; `opencode.json` regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` provisionado (valor fora do repositório); `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`; health healthy; `/pending-operations/active` retorna 401 por autenticação (rota existe, não 404).
+- **Gateway ted-runtime:** rollback tag `ted-runtime:rollback-pre-9dc5d1c`; `opencode.json` foi regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token dedicado de categoria provisionado (valor fora do repositório); flag efetiva `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; container healthy; rota `/api/agent/agents/finance-chat-agent/{workspace}/rpc/pending-operations/active` retorna 401 `auth.session_required` sem sessão (rota existe).
 - **PWA:** workflow `PWA Deploy`, run `44336496351` no SHA `9dc5d1c`; gate, deploy, smoke e attestation todos success; `/api/build-info` informa `gitSha` `9dc5d1c...`.
-- **Capacidades:** autoexecução de `categories.create` ativa em produção; `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`. `TED_RISK_BASED_AUTOEXECUTE` permanece `on` como valor pré-existente, não alterado neste deploy.
+- **Capacidades:** autoexecução de `categories.create` **não está ativa**: flag do gateway efetiva `0`, embora API tenha `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_RISK_BASED_AUTOEXECUTE=on` preexistente. A API permite autoautorização apenas para `transactions.expense.create`/`income.create` abaixo de 50000 cents; a partir de 50000 cents exige confirmação. `categories.create` depende do autocreate habilitado e política `auto_execute`, mas o TED não a aciona sem cliente no gateway. Transferências, cartões, contas a pagar, metas, orçamentos e atualizações não são autoexecutáveis.
 
-**Risco assumido:** ativação de produção ocorreu por decisão explícita do operador **sem homologação integral prévia com LLM real**. P5 continua INCONCLUSIVE; os fatos do deploy e os smokes acima não equivalem à homologação da jornada financeira ponta a ponta.
+**Ressalva:** o deploy de código ocorreu sem homologação integral prévia com LLM real. A configuração efetiva pós-deploy observada não ativou autoexecução de categoria. P5 continua INCONCLUSIVE; os smokes acima não equivalem à homologação da jornada financeira ponta a ponta.
+
+## Validação pós-deploy (2026-11-18)
+
+| Configuração | Esperado/documentado | Efetivo observado | Risco | Correção necessária |
+| --- | --- | --- | --- | --- |
+| `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` (documentação de deploy) | `0` no gateway | Autoexecução de `categories.create` não está ativa; não há cliente de autoexecução | Corrigir documentação; qualquer alteração da flag exige autorização explícita |
+| `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` | Provisionado para a capacidade | Set (valor omitido); `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` unset | Token presente não ativa capacidade com flag 0 | Sem correção operacional nesta missão |
+| `TED_RISK_BASED_AUTOEXECUTE` | Política API existente | `on` na API, valor preexistente | Política da API não implica cliente TED ativo | Não alterar aqui |
+| `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED` / supersede | `1` | `1` na API | Capacidade API existe, mas categoria autoexec segue inativa pelo gateway | Nenhuma nesta missão |
+| Prompt/memória/P3 no gateway | Habilitados conforme configuração | Prompt=1, memória=1, P3 reads=1, P3 writes=1 | — | Nenhuma nesta missão |
+
+**Saúde e revisão de código:** API healthy; `/health` e `/ready` 200, `gitSha=9dc5d1c65883bfbce4dabaf43b2759919843f8e1`, buildId `44330661848`. PWA respondeu 200; `/api/build-info` reportou o mesmo SHA e buildId `44330661883`. Gateway healthy. `main` está em `6a0d9b4` (commit #436 somente docs); produção está um commit docs-only atrás, com paridade de código.
+
+**Falhas de boot do gateway:** RestartCount=14, com 14 erros idênticos: `writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work`. O 15º boot iniciou após substituição do config stale (mtime `15:29:42Z`, início do container `15:29:54Z`). Há risco de recorrência em redeploy que altere config gerada; preservar backup e remover o `opencode.json` stale antes de um redeploy que precise regenerá-lo.
+
+**Validação funcional:** smoke autenticado BLOCKED: não havia credenciais de teste autorizadas no ambiente; estados `e2e/.auth` não foram usados. P5 com LLM real permanece **INCONCLUSIVE**; nenhuma chamada paga foi feita nesta missão. Issues #87 e #235 foram encerradas como obsoletas (A0 removido); #245 permanece aberta. Nenhum dado foi deletado.
+
+### Smoke de produção (somente leitura)
+
+Comando executado duas vezes:
+
+```sh
+E2E_PRODUCTION_SMOKE=1 E2E_PRODUCTION_URL=<PWA_PROD_URL> EXPECTED_SHA=9dc5d1c... pnpm --dir apps/pwa exec playwright test --config=e2e/playwright.config.ts --project=production-smoke --workers=1 --retries=0
+```
+
+O host de produção é validado por `scripts/validate-deploy-origins.mjs` e injetado pelo workflow de deploy.
+
+- Run 1: 1 PASS (SMOKE-05 build-info SHA); 4 FAIL (SMOKE-01..04) por `net::ERR_SOCKET_NOT_CONNECTED` / navegação com timeout de 45s — instabilidade de conectividade.
+- Run 2: 3 PASS (SMOKE-03, SMOKE-04, SMOKE-05); 2 FAIL (SMOKE-01 `/` e SMOKE-02 `/registros`), pois `getByRole('button',{name:/Registrar|Entrar/i})` não ficou visível em 15s.
+- `curl` direto, somente leitura, na mesma máquina: `/`=200, `/registros`=200, `/contas`=307, `/cartoes`=307.
+- Inspeção DOM independente com Chromium headless (12s de espera, sem autenticação) em `/`, `/registros` e `/hub/patrimonio?aba=contas`: as três renderizaram o shell de login, com texto visível “Meu Ted tudo em dia. E-MAIL SENHA Entrar”, 1 botão e `btnVisible=true`. Único erro no console: HTTP 401 esperado da sondagem de sessão sem autenticação.
+
+Conclusão: o CTA de login está presente e visível em produção nas rotas afetadas. SMOKE-03/04/05: **PASS**; SMOKE-01/02: **INCONCLUSIVE** (flake de carregamento/hidratação neste ambiente), não regressão de UI demonstrada. A suíte de smoke não está totalmente verde. Nenhum smoke autenticado foi executado: não havia credenciais autorizadas no ambiente e os estados `e2e/.auth` não foram usados. Homologação com LLM real permanece **INCONCLUSIVE**.
+
+### Testes determinísticos (sem LLM pago)
+
+| Suíte/comando | Resultado | Classificação |
+| --- | --- | --- |
+| TED runtime `node --test` serial: `p0-recovery`, `correction-actions`, `category-memory-store` + `category-memory-tool`, `p3-propose-income` + `p3-propose-expense` | 39 passaram / 0 falharam (4/4, 10/10, 3/3, 22/22) | PASS |
+| API Vitest `authorization-config` + `mutation-authorization-policy`; `keyed-mutations` | 24/24 e 6/6 | PASS |
+| API Vitest `pending-v2-authorize-route.test.ts` (arquivo completo) | 15 passaram / 2 falharam; ambos `Test timed out in 15000ms` em “fails closed when flag is unset/off”. Reexecução isolada dos mesmos dois testes: 2 passaram, 15 skipped, 6.29s | PASS na reexecução isolada |
+| API testes de supersede/idempotency/category-autocreate | 24 passaram / 2 falharam; ambos com timeout de 15s em `pending-v2-supersede.test.ts`. Reexecuções isoladas: `-t "feature flag off returns explicit refusal"` → 1 passou, 0 falhou, 14 skipped; `-t "audits the cancelled original and the replacement proposal"` → 1 passou, 0 falhou, 14 skipped; ambas exit 0 | PASS nas reexecuções isoladas |
+
+Os quatro timeouts dos arquivos completos foram causados por lentidão de runner/infra sob carga; todos os quatro testes passaram em reexecuções focadas, sem defeito funcional observado nas suítes 1–8. Os comandos focados de supersede foram `pending-v2-supersede.test.ts -t "feature flag off returns explicit refusal"` e `pending-v2-supersede.test.ts -t "audits the cancelled original and the replacement proposal"`. Os runs de arquivo completo seguem lentos neste ambiente; reexecuções isoladas foram confiáveis. Não houve alteração de código de produto para obter esses resultados. Sem chamada paga à LLM e sem E2E live-real; estes resultados não declaram homologação integral.
+
+Nenhuma flag de produção foi alterada e nenhum deploy foi realizado nesta missão de validação. Estes checks não constituem homologação integral.

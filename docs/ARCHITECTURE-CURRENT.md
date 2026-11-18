@@ -18,6 +18,8 @@ graph TD
 
 Em produção, o Worker A0 foi removido; o gateway é o runtime único. R2/DO foram preservados.
 
+Configuração efetiva observada em 2026-11-18: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no gateway, `TED_RISK_BASED_AUTOEXECUTE=on` na API (preexistente), e autocreate de categoria/supersede Pending V2 habilitados na API. O gateway não cria cliente de autoexecução com a flag em `0`; portanto `categories.create` autoexec não está ativa.
+
 ## Responsabilidades e limites
 
 - **API (`apps/api`):** fonte única de verdade financeira; autenticação, autorização por workspace, Pending V2, idempotência, confirmação, execução e recibos.

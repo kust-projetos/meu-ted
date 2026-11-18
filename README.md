@@ -107,8 +107,8 @@ invoca este comando). O que o comando faz:
   ainda fixa `NEXT_TELEMETRY_DISABLED=1`) — nenhum log imprime valores (só
   presença booleana, estágio e exit code/signal).
 - Sobe o PWA real (Next dev, via Node direto, sem shim de shell) contra a
-  API sintética + **gateway P2D sintético**; o upstream legado A0 é pinado
-  em loopback fechada e as bases `NEXT_PUBLIC_*` de agente/API ficam vazias,
+  API sintética + **gateway P2D sintético**; o upstream é sintético e usa
+  loopback fechada, sem A0 (runtime A0 removido); as bases `NEXT_PUBLIC_*` de agente/API ficam vazias,
   sem fallback para produção. Home temporário isolado — nunca o
   home/config/auth compartilhado do OpenCode.
 - Modo de preparação apenas, por construção (sem listener live, sem chamada
