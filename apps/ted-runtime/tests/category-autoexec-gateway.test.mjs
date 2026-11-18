@@ -10,7 +10,7 @@ const identity = { workspace: 'w', actorId: 'actor', deviceId: 'device', role: '
 const secret = 'synthetic-test-secret-not-real-0001';
 const category = { tool: 'categories.create', intentionId: 'int-0123456789abcdef0123456789abcdef', normalizedArgs: { name: 'Food', kind: 'expense' } };
 
-async function turn({ pin = true, enabled = false, client = null, intent = category, text = 'create category', requestTimeoutMs, abortRequestAfterMs, retryAfterAbort = false, seedRecovery = false } = {}) {
+async function turn({ pin = true, enabled = false, client = null, categoryClient = client, intent = category, text = 'create category', requestTimeoutMs, abortRequestAfterMs, retryAfterAbort = false, seedRecovery = false } = {}) {
   const proposalIntents = createProposalIntentRegistry();
   const store = createConversationStore({ persistDir: approvedTmpRoot('autoexec-gateway') });
   const settled = [];
@@ -32,7 +32,7 @@ async function turn({ pin = true, enabled = false, client = null, intent = categ
   };
   const gateway = createGatewayServer({
     resolveIdentity: async () => identity, store, proposalIntents,
-    autoExecEnabled: enabled, autoExecClient,
+    autoExecEnabled: enabled, autoExecClient, categoryAutoExecClient: categoryClient,
     ...(requestTimeoutMs ? { requestTimeoutMs } : {}),
     promptHost: {
       async chat({ sessionID }) {
@@ -136,6 +136,20 @@ test('existing proposal is delivered without authorize or execute', async () => 
   assert.ok(result.payload.proposal);
   assert.equal(client.calls.authorize, 0);
   assert.equal(client.calls.execute, 0);
+});
+
+test('category gateway selects the scoped client and stays pending when it is absent', async () => {
+  const generic = successfulClient();
+  const scoped = successfulClient();
+  const selected = await turn({ enabled: true, client: generic, categoryClient: scoped });
+  assert.deepEqual(selected.payload.autoexec, { status: 'executed' });
+  assert.equal(scoped.calls.mint, 1);
+  assert.equal(generic.calls.mint, 0);
+
+  const missing = await turn({ enabled: true, client: generic, categoryClient: null });
+  assert.ok(missing.payload.proposal);
+  assert.equal('autoexec' in missing.payload, false);
+  assert.equal(generic.calls.mint, 0);
 });
 
 test('outer timeout aborts autoexec and leaves intention pending and proposal available', async () => {

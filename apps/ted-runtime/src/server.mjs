@@ -300,6 +300,7 @@ export function createGatewayServer({
   diagnosticsSink = defaultDiagnosticSink,
   proposalIntents = proposalIntentRegistry,
   autoExecClient = null,
+  categoryAutoExecClient = null,
   autoExecEnabled = false,
   correctionActions = correctionActionRegistry,
   categoryMemoryDbPath,
@@ -777,7 +778,7 @@ export function createGatewayServer({
       }
       let proposalForAutoexec = null;
       let canAutoexec = false;
-      if (autoExecEnabled && autoExecClient && pin.pin === 'b' && !correctionCandidate) {
+      if (autoExecEnabled && pin.pin === 'b' && !correctionCandidate) {
         proposalForAutoexec = proposalIntents.peek(runtimeSessionId);
         if (proposalForAutoexec) {
           const { isAutoEligibleCategoryIntent } = await import('./category-autoexec.mjs');
@@ -795,10 +796,10 @@ export function createGatewayServer({
         });
       }
       let autoexecResult = null;
-      if (canAutoexec) {
+      if (canAutoexec && categoryAutoExecClient) {
         const { tryAutoCreateCategory } = await import('./category-autoexec.mjs');
         autoexecResult = await tryAutoCreateCategory({
-          client: autoExecClient, identity, intentionId: body.intentionId,
+          client: categoryAutoExecClient, identity, intentionId: body.intentionId,
           intent: proposalForAutoexec, signal, budgetMs: Math.max(1, Math.min(12_000, requestDeadline - Date.now() - 250)),
         });
         // A caller disconnect/outer request timeout leaves both the

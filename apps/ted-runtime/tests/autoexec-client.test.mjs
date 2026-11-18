@@ -24,6 +24,7 @@ test('uses manual redirects, scoped credentials and maps real V2 response contra
   assert.equal((await client.authorize({ token: 'bearer', workspaceId: 'w', actorId: 'a', deviceId: 'd', operationId: 'pending' })).status, 'confirmed');
   assert.equal((await client.execute({ token: 'bearer', workspaceId: 'w', actorId: 'a', deviceId: 'd', operationId: 'pending', attestation: 'a'.repeat(32) })).status, 'succeeded');
   assert.ok(seen.every(({ options }) => options.redirect === 'manual'));
+  assert.equal(seen[0].url, 'http://127.0.0.1:3001/auth/agent/autoexec-token');
   assert.equal(seen[0].options.headers['x-agent-autoexec-service-token'], serviceToken);
   assert.equal(seen[0].options.headers.authorization, undefined);
   for (const { options } of seen.slice(1)) {
@@ -34,6 +35,20 @@ test('uses manual redirects, scoped credentials and maps real V2 response contra
     assert.equal(options.headers['x-agent-autoexec-service-token'], undefined);
   }
   assert.equal(seen[1].options.headers['Idempotency-Key'], 'key');
+});
+
+test('uses caller-supplied mint path and service header name', async () => {
+  let request;
+  const client = createAutoExecClient({
+    ...base,
+    mintPath: '/auth/agent/category-autoexec-token',
+    serviceHeaderName: 'x-agent-category-autoexec-service-token',
+    fetchImpl: async (url, options) => { request = { url, options }; return ok({ token: 'minted' }); },
+  });
+  await client.mint({ workspaceId: 'w', actorId: 'a', deviceId: 'd', intentionId: 'i' });
+  assert.equal(request.url, 'http://127.0.0.1:3001/auth/agent/category-autoexec-token');
+  assert.equal(request.options.headers['x-agent-category-autoexec-service-token'], serviceToken);
+  assert.equal(request.options.headers['x-agent-autoexec-service-token'], undefined);
 });
 
 test('preserves existing:true from the V2 propose response', async () => {

@@ -108,6 +108,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   const profile = readEnv('TED_RUNTIME_PROFILE', 'test');
   const autoExecEnabled = readEnv('TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED', '') === '1';
   const autoExecServiceToken = readEnv('TED_RUNTIME_AUTOEXEC_MINT_TOKEN', '');
+  const categoryAutoExecMintToken = readEnv('TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN', '');
   const pendingMintToken = readEnv('TED_PENDING_MINT_TOKEN', '');
   const workspaceDeletionServiceToken = readEnv('TED_WORKSPACE_DELETION_SERVICE_TOKEN', '');
   const workspaceDeletionSecret = readEnv('WORKSPACE_DELETION_HMAC_SECRET', '');
@@ -142,10 +143,19 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
     const diagSink = typeof diagnosticsSink === 'function' ? diagnosticsSink : defaultDiagnosticSink;
     const promptHost = tedEnv.serverOps.createPromptHost({ diagnosticsSink: diagSink });
     let autoExecClient = null;
+    let categoryAutoExecClient = null;
     if (autoExecEnabled && autoExecServiceToken.length >= 32) {
       const { createAutoExecClient } = await import('./autoexec-client.mjs');
       autoExecClient = createAutoExecClient({
         apiBaseUrl, allowedApiOrigins, serviceToken: autoExecServiceToken,
+      });
+    }
+    if (autoExecEnabled && categoryAutoExecMintToken.length >= 32) {
+      const { createAutoExecClient } = await import('./autoexec-client.mjs');
+      categoryAutoExecClient = createAutoExecClient({
+        apiBaseUrl, allowedApiOrigins, serviceToken: categoryAutoExecMintToken,
+        mintPath: '/auth/agent/category-autoexec-token',
+        serviceHeaderName: 'x-agent-category-autoexec-service-token',
       });
     }
     const { createPendingClient } = await import('./pending-client.mjs');
@@ -159,10 +169,11 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
       store,
       promptHost,
       autoExecClient,
+      categoryAutoExecClient,
       pendingClient,
       workspaceDeletionSecret,
       stateDir: tedEnv.dirs.state,
-      autoExecEnabled: Boolean(autoExecClient),
+      autoExecEnabled,
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
       withAuthenticatedSession: (sessionID, host, fn, opts) =>
         tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, {
