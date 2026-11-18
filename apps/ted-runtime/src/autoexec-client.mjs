@@ -1,6 +1,6 @@
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 
-export function createAutoExecClient({ apiBaseUrl, allowedApiOrigins = [], serviceToken, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+export function createAutoExecClient({ apiBaseUrl, allowedApiOrigins = [], serviceToken, fetchImpl = fetch, timeoutMs = 15000, mintPath = '/auth/agent/autoexec-token', serviceHeaderName = 'x-agent-autoexec-service-token' } = {}) {
   if (typeof serviceToken !== 'string' || serviceToken.length < 32) throw new Error('autoexec unavailable');
   let origin;
   try {
@@ -14,7 +14,7 @@ export function createAutoExecClient({ apiBaseUrl, allowedApiOrigins = [], servi
 
   async function request(path, { method = 'POST', body, token, service = false, identity, idempotencyKey, signal: externalSignal } = {}) {
     const headers = { accept: 'application/json', 'content-type': 'application/json' };
-    if (service) headers['x-agent-autoexec-service-token'] = serviceToken;
+    if (service) headers[serviceHeaderName] = serviceToken;
     else {
       headers.authorization = `Bearer ${token}`;
       headers['x-workspace-id'] = identity.workspaceId;
@@ -39,7 +39,7 @@ export function createAutoExecClient({ apiBaseUrl, allowedApiOrigins = [], servi
   }
   const ident = (x) => ({ workspaceId: x.workspaceId, actorId: x.actorId, deviceId: x.deviceId });
   return {
-    mint: (x) => request('/auth/agent/autoexec-token', {
+    mint: (x) => request(mintPath, {
       body: { workspaceId: x.workspaceId, actorId: x.actorId, deviceId: x.deviceId, intentionId: x.intentionId },
       service: true, signal: x.signal,
     }),
