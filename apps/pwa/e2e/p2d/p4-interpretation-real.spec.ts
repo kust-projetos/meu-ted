@@ -11,6 +11,7 @@ const PROMPTS = [
 ];
 const SALARY_CATEGORY = "22222222-2222-4222-8222-222222222223";
 const FOOD_CATEGORY = "22222222-2222-4222-8222-222222222221";
+const CLARIFICATION_ANSWER = "Pode usar a conta Itaú. Para a categoria, use a existente mais adequada; não precisa criar nova.";
 
 test.describe.configure({ mode: "serial" });
 test.skip(process.env.P2D_LIVE_REAL !== "1" || process.env.P2D_FINANCE_INTERPRETATION_REAL !== "1", "requires explicit live-real interpretation opt-in");
@@ -46,7 +47,7 @@ async function openTed(page: Page, baseURL?: string) {
 }
 
 test("live-real: interprets four financial messages without executing proposals", async ({ page }, testInfo) => {
-  test.setTimeout(900000);
+  test.setTimeout(1500000);
   const baseline = await ctl<State>("/p2d/expense-state");
   const initialIds = new Set(baseline.transactions.map((tx) => tx.id));
   const beforeStats = await ctl<Stats>("/p2d/stats");
@@ -66,12 +67,24 @@ test("live-real: interprets four financial messages without executing proposals"
   const evidence: Array<Record<string, unknown>> = [];
   for (const [index, expected] of PROMPTS.entries()) {
     const beforeCount = proposals.length;
+    const assistantMessages = page.getByText("TED", { exact: true }).locator("xpath=../../..");
+    const assistantMessageCount = await assistantMessages.count();
     await input.fill(expected.text);
     const send = page.getByRole("button", { name: /enviar mensagem/i });
     await expect(send).toBeEnabled({ timeout: 120000 });
     await send.click();
-    await expect.poll(() => proposals.length, { timeout: 300000 }).toBeGreaterThanOrEqual(beforeCount + 1);
     await expect(page.getByText("conectando.", { exact: false })).toHaveCount(0, { timeout: 300000 });
+    const clarificationPattern = /confirmar|qual conta|Itaú|Nubank|categoria|prefere/i;
+    const clarificationAnswered = (await assistantMessages.allTextContents())
+      .slice(assistantMessageCount)
+      .some((content) => clarificationPattern.test(content));
+    if (clarificationAnswered) {
+      await input.fill(CLARIFICATION_ANSWER);
+      await expect(send).toBeEnabled({ timeout: 120000 });
+      await send.click();
+      await expect(page.getByText("conectando.", { exact: false })).toHaveCount(0, { timeout: 300000 });
+    }
+    await expect.poll(() => proposals.length, { timeout: 300000 }).toBeGreaterThanOrEqual(beforeCount + 1);
     const newProposals = proposals.slice(beforeCount);
     const proposalToolsSeen = newProposals.map(({ tool }) => tool);
     const proposal = newProposals.find(({ tool }) => tool === expected.tool);
@@ -109,6 +122,7 @@ test("live-real: interprets four financial messages without executing proposals"
       observedYesterdayDate = args.date;
     }
     evidence.push({ tool: selectedProposal.tool, proposalToolsSeen, amountCents: args.amountCents, description: args.description,
+      clarificationAnswered, clarificationResponse: clarificationAnswered ? CLARIFICATION_ANSWER : null,
       categoryId: args.categoryId ?? "NOT_OBSERVED", date: args.date ?? null,
       ...(observedYesterdayDate ? { observedYesterdayDate } : {}),
       ...(index === 0 ? { categoryResolution: args.categoryId ? "OBSERVED" : "NOT_OBSERVED" } : {}) });
