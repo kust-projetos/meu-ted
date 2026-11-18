@@ -26,20 +26,39 @@ atestação.
 - Execução 1 (`p2d-live-real`): PASSOU — 1 prompt, 2 leituras
   (`get_month_summary`, `list_accounts`), provider `opencode-go`, modelo
   `opencode-go/deepseek-v4.1-flash`.
-- Execução 2 (`p3-expense-real`, proposta+confirmação): PENDENTE. O modelo
-  gerou a intenção de proposta e a UI chegou ao broker, mas o E2E foi bloqueado
-  por falhas de harness: `pending.unavailable` no probe sem `pendingClient`,
-  depois `pending.upstream_error`, e por fim `next dev` em 3201 recusando
-  conexão. Causa de infraestrutura de teste, não de produto. O ciclo está
-  provado deterministicamente pelo teste integrado acima.
+- E2E com LLM real APROVADO: spec `p3-expense-real.spec.ts` passou (1 teste,
+  sem retry) em stack sintética: interpretação → proposta → decisão
+  `succeeded` com receipt `transactions.expense.create` → exatamente 1
+  transação R$50 mercado → 1 POST de execução no journal → replay sem duplicar.
+  Modelo/provider configurado no harness; custo/tokens não medidos
+  (NOT_OBSERVED).
+
+## Corte e descomissionamento (2026-11-18)
+
+- API publicada via wrapper `scripts/ops/api-release-20260930.sh` lane
+  source-build para SHA `79d8b09`, backup `pre-bb457bd-20261117`, ci-run
+  44214219471, rollback tag `pi-finance-api:rollback-pre-79d8b09`.
+- Gateway: código novo instalado em `/home/deploy/infra/ted-runtime/src`,
+  config `opencode.json` regenerada pelo bootstrap com backup
+  `opencode.json.bak-pre-79d8b09`, secrets provisionados (nomes apenas),
+  imagem `ted-runtime:main`, rollback tag
+  `ted-runtime:rollback-pre-79d8b09`, health healthy, rota
+  `/ted-runtime/...` responde 401 de auth (não 404 de rota).
+- PWA: `gh workflow run "PWA Deploy"` run 44216692235 — gate + deploy + smoke
+  + attestation todos success; `/api/build-info` gitSha `79d8b092...`.
+- Verificação pós-corte: PWA 200, API /health 200 com gitSha 79d8b09,
+  gateway 404 em rota desconhecida (up), A0
+  `pi-finance-agent.walissonead.workers.dev` 404 (Worker removido).
+- Descomissionamento: Worker Cloudflare `pi-finance-agent` removido
+  (`wrangler delete`), secrets apagados junto; bucket R2
+  `pi-finance-ted-attachments` e namespace/DO preservados por decisão do
+  operador.
 
 ## Riscos e pendências residuais
 
 - A atestação tem janela de 5 minutos.
 - Undo não tem exibição de target.
-- Dados históricos do A0 (DO/R2) não foram apagados; recursos Cloudflare
-  exigem autorização e inventário próprios. Nada foi deployado.
+- R2/DO foram preservados por decisão do operador.
 - Autoexecução de categoria segue desligada:
   `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED`.
 - `PENDING_V2_SUPERSEDE_ENABLED` é necessário para correção em produção.
-- O piloto real de proposta+confirmação permanece pendente.

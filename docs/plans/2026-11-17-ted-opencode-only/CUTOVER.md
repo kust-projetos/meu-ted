@@ -3,17 +3,20 @@
 ## Versões
 
 - Merge em `main`: `25457482fe857159eeb80abb480ebea0b944f3be`.
-- Versões atualmente publicadas:
-  - API: **NOT_VERIFIED — confirmar com operador**.
-  - PWA: **NOT_VERIFIED — confirmar com operador**.
-  - Gateway `ted-runtime`: **NOT_VERIFIED — confirmar com operador**.
+- Versões publicadas confirmadas: API, PWA e gateway `ted-runtime` em
+  `79d8b09`.
 
 ## Ordem de publicação
 
-1. **API** — publicar primeiro o contrato e as flags de Pending V2.
-2. **Gateway `ted-runtime`** — depende do contrato e dos tokens da API.
-3. **PWA** — seu fluxo TED é gateway-only e depende do gateway pronto.
-4. **Smoke** — verificar o conjunto integrado sem movimentação financeira real.
+1. **API** — EXECUTADO: lane source-build via
+   `scripts/ops/api-release-20260930.sh` para `79d8b09`; ci-run 44214219471.
+2. **Gateway `ted-runtime`** — EXECUTADO: código instalado, config regenerada,
+   secrets provisionados (nomes apenas), imagem `ted-runtime:main`; health
+   healthy e rota responde 401 de auth.
+3. **PWA** — EXECUTADO: run 44216692235 com gate, deploy, smoke e attestation
+   success; `/api/build-info` confirma gitSha `79d8b092...`.
+4. **Smoke** — EXECUTADO: pós-corte PWA 200, API /health 200 com gitSha
+   79d8b09, gateway up (404 em rota desconhecida).
 
 ## Configuração
 
@@ -44,32 +47,33 @@ neste plano. Nunca registrar valores de segredo no repositório:
 
 - Integração API/gateway Pending V2: 7/7 sintéticos.
 - Executar CFR e smoke autenticado, sem movimentação financeira real.
-- **Aceite operacional pendente:** uma jornada financeira única com LLM real
-  em stack controlada. E2E real ainda não aprovado.
+- **Aceite operacional APROVADO:** `p3-expense-real.spec.ts` passou 1 teste,
+  sem retry, em stack sintética; evidência detalhada em
+  [VALIDATION.md](VALIDATION.md). Custo/tokens: NOT_OBSERVED.
 
 ## Rollback
 
-Preparar as versões anteriores de API, gateway e PWA; em caso de falha,
-republicá-las na ordem inversa à publicação. Não restaurar A0 como serviço
+Versões/tag de rollback preservadas: API
+`pi-finance-api:rollback-pre-79d8b09`, gateway
+`ted-runtime:rollback-pre-79d8b09`; backup de config
+`opencode.json.bak-pre-79d8b09`. Em caso de falha, republicar versões
+anteriores na ordem inversa à publicação. Não restaurar A0 como serviço
 permanente. Preservar dados e ledger; não apagar nem reverter dados financeiros
 como parte do rollback.
 
 ## A0 e recursos de produção
 
-Inventário conhecido a partir dos documentos do repositório; estado ao vivo
-**NOT_VERIFIED** até auditoria pelo operador:
+Estado final confirmado:
 
-- Worker Cloudflare `pi-finance-agent`;
-- Durable Object `FINANCE_CHAT_AGENT`;
-- bucket `TED_ATTACHMENTS_BUCKET`;
-- secrets/vars `AGENT_*`;
-- workflow de deploy A0 removido do repositório; existência/estado de workflows
-  externos não verificados.
+- Worker Cloudflare `pi-finance-agent` removido (`wrangler delete`); secrets
+  apagados junto.
+- Bucket R2 `pi-finance-ted-attachments` e namespace/DO preservados por
+  decisão do operador.
 
-Preservar os recursos e históricos A0 existentes até autorização específica.
-Não houve auditoria ao vivo nem remoção nesta missão.
+O endpoint `pi-finance-agent.walissonead.workers.dev` retorna 404 (Worker
+removido). `apps/ted-runtime` é o gateway único runtime conversacional.
 
 ## Gate humano
 
-Deploy/corte e remoção de recursos exigem autorização explícita. Nada foi
-publicado, cortado ou removido nesta missão.
+O corte e descomissionamento acima foram executados em 2026-11-18 conforme
+decisão do operador.
