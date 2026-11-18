@@ -54,7 +54,9 @@ export function createNetworkReport(page: {
     pending.push((async () => {
       try {
         const body = await response.json();
-        if (body && typeof body.code === "string") event.code = body.code;
+        if (typeof body === "object" && body !== null && "code" in body && typeof body.code === "string") {
+          event.code = body.code;
+        }
       } catch { /* response may not contain JSON */ }
     })());
   };

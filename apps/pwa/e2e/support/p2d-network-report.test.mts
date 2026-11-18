@@ -2,13 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNetworkReport } from "./p2d-network-report.mts";
 
-class MockPage {
-  listeners = new Map<string, (response: any) => void>();
-  on(event: string, listener: (response: any) => void) { this.listeners.set(event, listener); }
-  off(event: string, listener: (response: any) => void) {
+type FakeResponse = {
+  url(): string;
+  status(): number;
+  request(): {
+    method(): string;
+    timing(): { responseEnd: number };
+  };
+  json(): Promise<unknown>;
+};
+type Listener = (response: FakeResponse) => void;
+type FakePage = {
+  on(event: "response", listener: Listener): void;
+  off(event: "response", listener: Listener): void;
+};
+
+class MockPage implements FakePage {
+  listeners = new Map<"response", Listener>();
+  on(event: "response", listener: Listener) { this.listeners.set(event, listener); }
+  off(event: "response", listener: Listener) {
     if (this.listeners.get(event) === listener) this.listeners.delete(event);
   }
-  async emit(response: any) { await this.listeners.get("response")?.(response); }
+  async emit(response: FakeResponse) { this.listeners.get("response")?.(response); }
 }
 
 function response(path: string, status: number, body: unknown) {
