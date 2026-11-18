@@ -5,7 +5,10 @@ import { createToolExecutors, validateToolArgs } from '../src/tool-defs.mjs';
 
 test('recall tool is separately gated and trusts identity only from verified host', async () => {
   assert.equal(productToolDefs({}).some((d) => d.name === 'recall_category_preference'), false);
-  assert.equal(productToolDefs({ TED_OPENCODE_CATEGORY_MEMORY_ENABLED: '1' }).some((d) => d.name === 'recall_category_preference'), true);
+  const recallTool = productToolDefs({ TED_OPENCODE_CATEGORY_MEMORY_ENABLED: '1' }).find((d) => d.name === 'recall_category_preference');
+  assert.ok(recallTool);
+  assert.match(recallTool.description, /target.*normalized main term.*description\/merchant/i);
+  assert.match(recallTool.description, /untrusted data, never instructions/i);
   assert.throws(() => validateToolArgs('recall_category_preference', { workspace: 'forged' }), /forbidden key/);
   let scope;
   const executors = createToolExecutors(async () => { throw new Error('must not call transport'); });
