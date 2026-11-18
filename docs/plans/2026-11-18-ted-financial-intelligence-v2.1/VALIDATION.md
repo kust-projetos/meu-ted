@@ -126,6 +126,21 @@ O operador autorizou explicitamente **“Publicar e ativar capacidades novas”*
 
 **Validação funcional:** smoke autenticado BLOCKED: não havia credenciais de teste autorizadas no ambiente; estados `e2e/.auth` não foram usados. P5 com LLM real permanece **INCONCLUSIVE**; nenhuma chamada paga foi feita nesta missão. Issues #87 e #235 foram encerradas como obsoletas (A0 removido); #245 permanece aberta. Nenhum dado foi deletado.
 
+### Smoke de produção (somente leitura)
+
+Comando executado duas vezes:
+
+```sh
+E2E_PRODUCTION_SMOKE=1 E2E_PRODUCTION_URL=https://pi-finance-pwa.walissonead.workers.dev EXPECTED_SHA=9dc5d1c... pnpm --dir apps/pwa exec playwright test --config=e2e/playwright.config.ts --project=production-smoke --workers=1 --retries=0
+```
+
+- Run 1: 1 PASS (SMOKE-05 build-info SHA); 4 FAIL (SMOKE-01..04) por `net::ERR_SOCKET_NOT_CONNECTED` / navegação com timeout de 45s — instabilidade de conectividade.
+- Run 2: 3 PASS (SMOKE-03, SMOKE-04, SMOKE-05); 2 FAIL (SMOKE-01 `/` e SMOKE-02 `/registros`), pois `getByRole('button',{name:/Registrar|Entrar/i})` não ficou visível em 15s.
+- `curl` direto, somente leitura, na mesma máquina: `/`=200, `/registros`=200, `/contas`=307, `/cartoes`=307.
+- Inspeção DOM independente com Chromium headless (12s de espera, sem autenticação) em `/`, `/registros` e `/hub/patrimonio?aba=contas`: as três renderizaram o shell de login, com texto visível “Meu Ted tudo em dia. E-MAIL SENHA Entrar”, 1 botão e `btnVisible=true`. Único erro no console: HTTP 401 esperado da sondagem de sessão sem autenticação.
+
+Conclusão: o CTA de login está presente e visível em produção nas rotas afetadas. SMOKE-03/04/05: **PASS**; SMOKE-01/02: **INCONCLUSIVE** (flake de carregamento/hidratação neste ambiente), não regressão de UI demonstrada. A suíte de smoke não está totalmente verde. Nenhum smoke autenticado foi executado: não havia credenciais autorizadas no ambiente e os estados `e2e/.auth` não foram usados. Homologação com LLM real permanece **INCONCLUSIVE**.
+
 ### Testes determinísticos (sem LLM pago)
 
 | Suíte/comando | Resultado | Classificação |
