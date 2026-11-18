@@ -120,7 +120,7 @@ O operador autorizou explicitamente **“Publicar e ativar capacidades novas”*
 | `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED` / supersede | `1` | `1` na API | Capacidade API existe, mas categoria autoexec segue inativa pelo gateway | Nenhuma nesta missão |
 | Prompt/memória/P3 no gateway | Habilitados conforme configuração | Prompt=1, memória=1, P3 reads=1, P3 writes=1 | — | Nenhuma nesta missão |
 
-**Saúde e revisão de código:** API `pi-finance-api` healthy; `/health` e `/ready` 200, `gitSha=9dc5d1c65883bfbce4dabaf43b2759919843f8e1`, buildId `44330661848`. PWA `https://pi-finance-pwa.walissonead.workers.dev` respondeu 200; `/api/build-info` reportou o mesmo SHA e buildId `44330661883`. Gateway `ted-runtime` healthy. `main` está em `6a0d9b4` (commit #436 somente docs); produção está um commit docs-only atrás, com paridade de código.
+**Saúde e revisão de código:** API healthy; `/health` e `/ready` 200, `gitSha=9dc5d1c65883bfbce4dabaf43b2759919843f8e1`, buildId `44330661848`. PWA respondeu 200; `/api/build-info` reportou o mesmo SHA e buildId `44330661883`. Gateway healthy. `main` está em `6a0d9b4` (commit #436 somente docs); produção está um commit docs-only atrás, com paridade de código.
 
 **Falhas de boot do gateway:** RestartCount=14, com 14 erros idênticos: `writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work`. O 15º boot iniciou após substituição do config stale (mtime `15:29:42Z`, início do container `15:29:54Z`). Há risco de recorrência em redeploy que altere config gerada; preservar backup e remover o `opencode.json` stale antes de um redeploy que precise regenerá-lo.
 
@@ -131,8 +131,10 @@ O operador autorizou explicitamente **“Publicar e ativar capacidades novas”*
 Comando executado duas vezes:
 
 ```sh
-E2E_PRODUCTION_SMOKE=1 E2E_PRODUCTION_URL=https://pi-finance-pwa.walissonead.workers.dev EXPECTED_SHA=9dc5d1c... pnpm --dir apps/pwa exec playwright test --config=e2e/playwright.config.ts --project=production-smoke --workers=1 --retries=0
+E2E_PRODUCTION_SMOKE=1 E2E_PRODUCTION_URL=<PWA_PROD_URL> EXPECTED_SHA=9dc5d1c... pnpm --dir apps/pwa exec playwright test --config=e2e/playwright.config.ts --project=production-smoke --workers=1 --retries=0
 ```
+
+O host de produção é validado por `scripts/validate-deploy-origins.mjs` e injetado pelo workflow de deploy.
 
 - Run 1: 1 PASS (SMOKE-05 build-info SHA); 4 FAIL (SMOKE-01..04) por `net::ERR_SOCKET_NOT_CONNECTED` / navegação com timeout de 45s — instabilidade de conectividade.
 - Run 2: 3 PASS (SMOKE-03, SMOKE-04, SMOKE-05); 2 FAIL (SMOKE-01 `/` e SMOKE-02 `/registros`), pois `getByRole('button',{name:/Registrar|Entrar/i})` não ficou visível em 15s.
