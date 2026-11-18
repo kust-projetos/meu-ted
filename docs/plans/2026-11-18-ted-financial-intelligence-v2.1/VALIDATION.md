@@ -165,3 +165,13 @@ Execuções no projeto Playwright existente `p2d-synthetic`, com provider soment
 - Não há alegação de homologação com LLM real; P5 permanece **INCONCLUSIVE**.
 
 Nenhuma flag de produção foi alterada e nenhum deploy foi realizado nesta missão de validação. Estes checks não constituem homologação integral.
+
+## Homologação funcional — tentativas e diagnóstico direto (2026-11-18)
+
+- O operador autorizou uma rodada P5 paga e uma conta de teste dedicada. Nenhuma credencial `PWA_LIVE_*` foi injetada; a conta genérica do arquivo de ambiente local não foi usada. #439 permanece **BLOCKED**.
+- **Primeira tentativa P5 paga:** `Error: No tests found`, 0 testes e 0 chamadas de modelo. O `grep` do launcher por `p2d-live-real` excluía o título P5 `live-real: correct expense amount...` quando `CATEGORY_CORRECTION_REAL=1`. Corrigido no PR #443 (merged); depois, `--list` gratuito selecionou 1 teste e `p2d-live-modes` passou **35/35**.
+- **Segunda tentativa P5 paga** (único teste executado): **FAIL** após cerca de 6,7 minutos. A UI exibiu “Falha no envio” e “Não foi possível preparar a proposta de despesa. Tente novamente.” Não houve botão Confirmar nem evidência de decisão, recibo, transação, `executionPosts` ou replay; também não foi gerado artefato de relatório de rede. O arquivo de ambiente foi restaurado com hash idêntico; nenhuma nova tentativa foi feita.
+- **Observabilidade:** PR #444 (merged) registra metadados de rede sincronamente, limita a leitura do corpo JSON a 1500 ms e garante que isso não bloqueie `report()`; testes do helper passaram **6/6**. A investigação SQLite read-only confirmou que o harness P2D não inicia `workerd` e usa uma raiz temporária nova. Concorrência e causalidade com a falha P5 permanecem **NOT_VERIFIED**; sem reprodução, nenhuma correção foi feita.
+- **Diagnóstico direto** (sem Playwright, LLM paga ou retries; uma rodada): **55/55 testes passaram** — ciclo de integração API **7/7** (Fastify + gateway loopback: 200/201/400/403/409, incluindo `validation.error` e `agent.workspace_not_empty`); supersede/idempotência de aprovações **23/23** (replay 201/200, `pending.supersede_disabled` 404 e códigos `approval.*`/`idempotency.conflict`); correção/proposta/recuperação do runtime **25/25** (correções 200 sem fallback; recuperação 502/409/200 com um prompt). **Nenhum defeito funcional foi comprovado.**
+
+**Conclusão:** contratos financeiros estão intactos na camada sintética. P5 com LLM real permanece **FAIL**, de causa indeterminada e sem atribuição a componente. Homologação com LLM real, smoke autenticado da UI e aprendizado de categoria continuam pendentes. Produção permaneceu inalterada: sem deploy ou alteração de flags. Os commits de merge #437, #438, #442, #443 e #444 estão em `main`.
