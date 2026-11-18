@@ -1,13 +1,13 @@
 /**
- * Live-real correction before confirmation: the pending expense must reflect
- * the corrected amount and execute exactly once.
+ * Live-real correction with an explicit account avoids a clarification turn;
+ * the pending expense must reflect the corrected amount and execute exactly once.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { resolveP2dPorts } from "../support/ports";
 
 const ports = resolveP2dPorts(process.env);
 const CTL = `http://127.0.0.1:${ports.ctlPort}`;
-const USER_TEXT = "Gastei R$ 50,00 no mercado ontem.";
+const USER_TEXT = "Gastei R$ 50,00 no mercado ontem no Nubank.";
 const CORRECTION_TEXT = "Na verdade, foram R$ 55,00.";
 const CONFIRM_LABEL = /Confirmar R\$ 55,00/;
 
