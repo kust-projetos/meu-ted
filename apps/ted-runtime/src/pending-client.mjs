@@ -26,6 +26,16 @@ function validOutcome(value,id) {
   if (value.status==='failed'&&value.failureCode!==undefined&&value.failureCode!=='in_use') return false;
   return true;
 }
+function upstreamOperation(path) {
+  if (path === '/auth/agent/pending-token') return 'mint';
+  if (path === '/pending-operations/v2/propose') return 'propose';
+  if (path === '/internal/agent/empty-attestations') return 'deposit';
+  if (path === '/pending-operations/undo') return 'undo';
+  const action = path.match(/\/pending-operations\/v2\/(?:[^/]+\/)?(confirm|execute|cancel|retry|outcome|supersede)$/)?.[1];
+  if (action) return action;
+  if (/\/pending-operations\/v2\/(?:[^/]+|active)$/.test(path)) return 'get';
+  return 'request';
+}
 export class PendingClientError extends Error { constructor(code='pending.upstream_error', effectMayHaveOccurred=true){ super('pending operation request failed'); this.name='PendingClientError'; this.code=code; this.effectMayHaveOccurred=effectMayHaveOccurred; } }
 export function createPendingClient({ apiBaseUrl, allowedOrigins=[], pendingMintToken, workspaceDeletionServiceToken, fetchImpl=fetch, timeoutMs=15000 }={}) {
   let origin;
@@ -37,7 +47,7 @@ export function createPendingClient({ apiBaseUrl, allowedOrigins=[], pendingMint
     else { headers.authorization=`Bearer ${token}`; headers['x-workspace-id']=identity.workspaceId; headers['x-actor-id']=identity.actorId; headers['x-device-id']=identity.deviceId; }
     if(key) headers['Idempotency-Key']=key;
     const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),timeoutMs), joined=signal?AbortSignal.any([ctrl.signal,signal]):ctrl.signal;
-    try { const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined}); if(r.status>=300&&r.status<400) throw new PendingClientError(); const data=await r.json().catch(()=>null); if(!r.ok) { const code=r.status>=500?'pending.upstream_5xx':[400,401,403,404,409,429].includes(r.status)?`pending.upstream_${r.status}`:'pending.upstream_error'; throw new PendingClientError(code,method!=='GET'&&r.status<500); } if(!data||typeof data!=='object') throw new PendingClientError(); return data; }
+    try { const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined}); if(r.status>=300&&r.status<400) throw new PendingClientError(); const data=await r.json().catch(()=>null); if(!r.ok) { const code=r.status>=500?`pending.upstream_5xx_${upstreamOperation(path)}`:[400,401,403,404,409,429].includes(r.status)?`pending.upstream_${r.status}_${upstreamOperation(path)}`:'pending.upstream_error'; throw new PendingClientError(code,method!=='GET'&&r.status<500); } if(!data||typeof data!=='object') throw new PendingClientError(); return data; }
     catch(e){ if(e instanceof PendingClientError) throw e; throw new PendingClientError(signal?.aborted?'pending.cancelled':'pending.upstream_error'); } finally{clearTimeout(timer);}
   }
   const scoped=x=>({workspaceId:x.workspaceId,actorId:x.actorId,deviceId:x.deviceId});

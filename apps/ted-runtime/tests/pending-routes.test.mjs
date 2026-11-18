@@ -164,7 +164,7 @@ it('maps Pending upstream HTTP statuses without exposing response details', asyn
       status, headers: { 'x-private': 'must-not-leak' },
     }),
   });
-  for (const [httpStatus, code] of [[400,'pending.upstream_400'],[403,'pending.upstream_403'],[404,'pending.upstream_404'],[409,'pending.upstream_409'],[500,'pending.upstream_5xx'],[503,'pending.upstream_5xx']]) {
+  for (const [httpStatus, code] of [[400,'pending.upstream_400_propose'],[403,'pending.upstream_403_propose'],[404,'pending.upstream_404_propose'],[409,'pending.upstream_409_propose'],[500,'pending.upstream_5xx_propose'],[503,'pending.upstream_5xx_propose']]) {
     status = httpStatus;
     await assert.rejects(client.propose({ ...identity, token:'t', tool:'categories.create', normalizedArgs:{} }), error => {
       assert.equal(error.code, code);
@@ -176,8 +176,8 @@ it('maps Pending upstream HTTP statuses without exposing response details', asyn
   }
   status = 401;
   await assert.rejects(client.get({ ...identity, token:'t', id:opId }), error =>
-    error.code === 'pending.upstream_401' && error.effectMayHaveOccurred === false);
+    error.code === 'pending.upstream_401_get' && error.effectMayHaveOccurred === false);
   status = 429;
   await assert.rejects(client.get({ ...identity, token:'t', id:opId }), error =>
-    error.code === 'pending.upstream_429' && error.effectMayHaveOccurred === false);
+    error.code === 'pending.upstream_429_get' && error.effectMayHaveOccurred === false);
 });
