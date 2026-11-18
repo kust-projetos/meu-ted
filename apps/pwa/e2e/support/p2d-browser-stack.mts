@@ -192,9 +192,10 @@ const customTokenStore = {
     opts?: Parameters<typeof deviceTokenStore.register>[2],
   ) {
     const registered = await deviceTokenStore.register(deviceName, householdId, opts);
+    const access = await workspaceAccess.resolve(opts?.userId ?? "", householdId);
     registeredDevices.set(registered.deviceId, {
       householdId: registered.householdId,
-      authUserId: opts?.userId ?? null,
+      authUserId: access?.userId ?? opts?.userId ?? null,
     });
     deviceByToken.set(registered.token, registered.deviceId);
     return registered;
@@ -207,9 +208,10 @@ const customTokenStore = {
   ) {
     const rotated = await deviceTokenStore.rotate(currentToken, deviceName, householdId, opts);
     const context = await deviceTokenStore.resolve(rotated.token, rotated.householdId);
+    const access = await workspaceAccess.resolve(context.userId ?? "", rotated.householdId);
     registeredDevices.set(rotated.deviceId, {
       householdId: rotated.householdId,
-      authUserId: context.userId ?? null,
+      authUserId: access?.userId ?? context.userId ?? null,
     });
     deviceByToken.set(rotated.token, rotated.deviceId);
     return rotated;
