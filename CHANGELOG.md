@@ -1,14 +1,11 @@
-## Unreleased (2026-11-17)
-
-- Descontinuado e removido o runtime A0 (`apps/agent`) do workspace, build e CI; `apps/ted-runtime` permanece como único runtime conversacional e a API continua autoridade financeira. Recursos e dados históricos de produção não foram removidos.
-
 # Changelog
 
 ## Unreleased (2026-11-18)
 
-- Deploy de produção da Financial Intelligence V2.1 no baseline `9dc5d1c65883bfbce4dabaf43b2759919843f8e1`; `categories.create` autoexec está ativada por autorização explícita do operador. P5 com LLM real permanece INCONCLUSIVE e a ativação ocorreu sem homologação prévia, risco assumido. Evidências em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
+- Descontinuado e removido o runtime A0 (`apps/agent`) do workspace, build e CI; `apps/ted-runtime` permanece como único runtime conversacional e a API continua autoridade financeira. Recursos e dados históricos de produção não foram removidos.
+- Configuração pós-deploy observada: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; `categories.create` autoexec não está ativa, apesar de token provisionado e autocreate API habilitado. P5 com LLM real permanece INCONCLUSIVE. Evidências em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
 - PR #435 (`fix(gateway): inject category autoexec mint token into compose`) mesclado antes do deploy para disponibilizar o token dedicado no compose do gateway.
-- Corte final TED OpenCode-only confirmado em API, PWA e gateway (`79d8b09`); E2E com LLM real aprovado. Worker A0 removido em produção; R2/DO preservados.
+- Corte TED OpenCode-only histórico, registrado no baseline `79d8b09`; o baseline atual observado de produção é `9dc5d1c` (API/PWA; runtime conforme validação pós-deploy). Worker A0 removido em produção; R2/DO preservados.
 
 ## v1.0.4 (2026-11-13)
 
