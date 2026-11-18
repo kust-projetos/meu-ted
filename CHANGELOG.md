@@ -6,7 +6,7 @@
 
 ## Unreleased (2026-11-18)
 
-- Validação documental da missão MEU TED Financial Intelligence V2.1: marcos de categorização e correções conversacionais integrados; jornada E2E completa não comprovada. Produção permanece no baseline `79d8b09`, sem deploy; detalhes em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
+- Validação documental da missão MEU TED Financial Intelligence V2.1: desenvolvimento concluído; homologação e ativação pendentes. Produção permanece no baseline `79d8b09`, sem deploy; detalhes em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
 - Corte final TED OpenCode-only confirmado em API, PWA e gateway (`79d8b09`); E2E com LLM real aprovado. Worker A0 removido em produção; R2/DO preservados.
 
 ## v1.0.4 (2026-11-13)
