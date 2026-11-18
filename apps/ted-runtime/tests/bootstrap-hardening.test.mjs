@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { claimHostDir, writeTedConfig } from '../src/bootstrap.mjs';
+import { claimHostDir, tedConfig, writeTedConfig } from '../src/bootstrap.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 function tmpRoot() {
@@ -126,5 +126,53 @@ describe('bootstrap hardening (fail-closed)', () => {
     }
     fs.writeFileSync(path.join(dir, 'target.json'), '{}');
     assert.throws(() => writeTedConfig(dir), /symlink/);
+  });
+
+  it('reconhece variantes geradas e reescreve transições de flags, mas preserva divergência', () => {
+    const dir = tmpRoot();
+    const file = writeTedConfig(dir, 'live', {
+      p3Writes: true,
+      productPrompt: false,
+      categoryMemory: false,
+    });
+
+    assert.equal(
+      writeTedConfig(dir, 'live', {
+        p3Writes: true,
+        productPrompt: true,
+        categoryMemory: true,
+      }),
+      file,
+    );
+    const wanted = `${JSON.stringify(tedConfig('live', {
+      p3Writes: true,
+      productPrompt: true,
+      categoryMemory: true,
+    }), null, 2)}\n`;
+    assert.equal(fs.readFileSync(file, 'utf8'), wanted, 'flag variant is replaced with exact generated config');
+
+    writeTedConfig(dir, 'live', {
+      p3Writes: true,
+      productPrompt: false,
+      categoryMemory: true,
+    });
+    const transitioned = `${JSON.stringify(tedConfig('live', {
+      p3Writes: true,
+      productPrompt: false,
+      categoryMemory: true,
+    }), null, 2)}\n`;
+    assert.equal(fs.readFileSync(file, 'utf8'), transitioned, 'another flag transition is replaced');
+
+    const edited = transitioned.replace('"ted"', '"user-agent"');
+    fs.writeFileSync(file, edited, 'utf8');
+    assert.throws(
+      () => writeTedConfig(dir, 'live', {
+        p3Writes: true,
+        productPrompt: false,
+        categoryMemory: true,
+      }),
+      /overwrite|exists|diverg|refuse/,
+    );
+    assert.equal(fs.readFileSync(file, 'utf8'), edited, 'user-edited config remains unchanged');
   });
 });

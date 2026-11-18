@@ -502,10 +502,9 @@ function isModelOverrideCompatible(currentText, wantedText) {
 }
 
 // No BOM on purpose: BOM-prefixed files are rejected by Config.parseInfo.
-// NEVER overwrites: an existing opencode.json is returned untouched when
-// byte-identical to ours (idempotent resume) or when it is our config plus
-// a legitimate native `model` selector override (preserved, never rewritten);
-// any other divergent file is the user's work and refused; a symlink is
+// Existing generated flag variants are rewritten to the requested config.
+// A legitimate native `model` selector override is preserved untouched;
+// any other divergent file is the user's work and refused. A symlink is
 // refused without following.
 // The configDir itself is checked for redirection before any write.
 export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false, productPrompt = false, categoryMemory = false } = {}) {
@@ -516,9 +515,6 @@ export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false, pro
   fs.mkdirSync(configDir, { recursive: true });
   const file = path.join(configDir, 'opencode.json');
   const wanted = JSON.stringify(tedConfig(profile, { p3Writes, productPrompt, categoryMemory }), null, 2) + '\n';
-  // The sibling flag state is OUR config too: switching the P3 local slice on
-  // (or off) on an existing isolated home must not be mistaken for user work.
-  const sibling = JSON.stringify(tedConfig(profile, { p3Writes: !p3Writes, productPrompt, categoryMemory }), null, 2) + '\n';
   let st;
   try {
     st = fs.lstatSync(file);
@@ -531,8 +527,25 @@ export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false, pro
     }
     const current = fs.readFileSync(file, 'utf8');
     if (current === wanted) return file; // byte-identical: our own config, resume
-    if (current === sibling) { fs.writeFileSync(file, wanted, { encoding: 'utf8' }); return file; }
     if (isModelOverrideCompatible(current, wanted)) return file; // legitimate native model override: preserve, never rewrite
+    // A previous release may have emitted any combination of these known
+    // generated flags. Rewrite only exact serialized variants; divergence
+    // outside this finite set remains user work and is refused below.
+    for (const previousP3Writes of [false, true]) {
+      for (const previousProductPrompt of [false, true]) {
+        for (const previousCategoryMemory of [false, true]) {
+          const variant = JSON.stringify(tedConfig(profile, {
+            p3Writes: previousP3Writes,
+            productPrompt: previousProductPrompt,
+            categoryMemory: previousCategoryMemory,
+          }), null, 2) + '\n';
+          if (current === variant) {
+            fs.writeFileSync(file, wanted, { encoding: 'utf8' });
+            return file;
+          }
+        }
+      }
+    }
     throw new Error('writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work');
   }
   fs.writeFileSync(file, wanted, { encoding: 'utf8' });
