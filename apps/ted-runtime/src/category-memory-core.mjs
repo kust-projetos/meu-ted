@@ -8,7 +8,10 @@ const normalizePart = (value) => {
 };
 
 export function categoryMemoryFingerprint({ workspaceId, actorId, target, field }) {
-  const identity = [workspaceId, actorId, target, field].map(normalizePart).join('\0');
+  const identity = [workspaceId, actorId, target, field]
+    .map(normalizePart)
+    .map((part, index) => index === 2 ? part.toLocaleLowerCase() : part)
+    .join('\0');
   return createHash('sha256').update(identity, 'utf8').digest('hex');
 }
 
