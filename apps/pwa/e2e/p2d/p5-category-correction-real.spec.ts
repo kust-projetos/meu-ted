@@ -197,10 +197,8 @@ test("live-real: correct expense amount before confirmation without creating a c
   });
   } finally {
     try {
-      await testInfo.attach("p5-network-report", {
-        body: Buffer.from(JSON.stringify(await networkReport.report(), null, 2)),
-        contentType: "application/json",
-      });
+      const reportPath = await networkReport.write(testInfo.outputPath("p5-network-report.json"));
+      await testInfo.attach("p5-network-report", { path: reportPath, contentType: "application/json" });
     } finally {
       networkReport.stop();
     }
