@@ -9,6 +9,7 @@ import { createGatewayServer } from '../src/server.mjs';
 import { correctionActionRegistry } from '../src/correction-actions.mjs';
 import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
 import { createUndoStore } from '../src/undo-store.mjs';
+import { recordCatalog, clearCatalog } from '../src/category-catalog.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 const identity = { workspaceId: 'w', actorId: 'a', deviceId: 'd', token: 'token' };
@@ -157,6 +158,9 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
   store.setActiveOperation(conversation.conversationId, oldId, owner.actorId);
   const proposalIntents = createProposalIntentRegistry();
   const calls = [];
+  const remembered = [];
+  const categoryId = '00000000-0000-0000-0000-000000000002';
+  recordCatalog('runtime-correction', { items: [{ id: categoryId, name: 'Transporte', kind: 'expense' }] });
   const client = {
     async mintToken() { return 'signed-token'; },
     async get(input) {
@@ -175,9 +179,10 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
   };
   const gateway = createGatewayServer({
     resolveIdentity: async () => owner, store, proposalIntents, pendingClient: client,
+    categoryMemoryStoreOverride: { remember(input) { remembered.push(input); return true; }, close() {} },
     promptHost: { async chat({ sessionID }) {
       correctionActionRegistry.record(sessionID, {
-        action: 'correct', changed: { amountCents: 7500 }, intentionId: 'turn-intent',
+        action: 'correct', changed: { amountCents: 7500, categoryId }, intentionId: 'turn-intent',
       });
       proposalIntents.record(sessionID, { tool: 'transactions.expense.create', normalizedArgs: { amountCents: 1 } });
       return { turnId: 'turn', output: 'Atualizei a proposta.' };
@@ -207,7 +212,11 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
     });
     assert.equal(calls[2][1].expectedProposalHash, 'a'.repeat(64));
     assert.equal(store.get(conversation.conversationId, owner).activeOperationId, newId);
+    assert.equal(remembered.length, 1);
+    assert.equal(remembered[0].value, 'Transporte');
+    assert.notEqual(remembered[0].value, categoryId);
   } finally {
+    clearCatalog('runtime-correction');
     correctionActionRegistry.clear('runtime-correction');
     await gateway.close();
   }
@@ -455,3 +464,4 @@ test('loopback supersede 404 is typed, preserves activeOperationId, and never fa
   });
   function unused() {}
 });
+

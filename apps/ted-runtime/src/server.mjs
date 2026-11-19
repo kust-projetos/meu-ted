@@ -40,6 +40,7 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { openCategoryMemoryStore } from './category-memory-store.mjs';
+import { getCatalog } from './category-catalog.mjs';
 import {
   CONVERSATION_COOKIE_MAX_AGE,
   ConversationError,
@@ -780,7 +781,12 @@ export function createGatewayServer({
             const revised = await pendingClient.supersede({ token, id: operationId, tool: old.tool, normalizedArgs, expectedProposalHash: old.proposalHash, idempotencyKey, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
             record = store.setActiveOperation(record.conversationId, revised.id, identity.actorId);
             if (correctionCandidate.changed.categoryId && categoryMemoryStore) {
-              try { categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:correctionCandidate.changed.categoryId }); } catch { /* optional memory */ }
+              try {
+                const categoryName = getCatalog(runtimeSessionId)?.find((category) => category.id === correctionCandidate.changed.categoryId)?.name;
+                if (typeof categoryName === 'string' && categoryName.trim()) {
+                  categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:categoryName });
+                }
+              } catch { /* optional memory */ }
             }
           }
         } catch (e) {
