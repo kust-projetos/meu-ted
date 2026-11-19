@@ -42,7 +42,13 @@ export function openCategoryMemoryStore({ dbPath, ttlMs = CATEGORY_MEMORY_TTL_MS
     },
     recall(input) {
       const fingerprint = validScope(input);
-      const row = select.get(input.workspaceId, input.actorId, fingerprint);
+      const row = select.get(input.workspaceId, input.actorId, fingerprint) ??
+        db.prepare(`SELECT * FROM category_memory
+          WHERE workspace_id=? AND actor_id=? AND field=?`)
+          .all(input.workspaceId, input.actorId, input.field.trim())
+          .find((candidate) =>
+            candidate.target.normalize('NFC').trim().toLocaleLowerCase() ===
+            input.target.normalize('NFC').trim().toLocaleLowerCase());
       if (!row || row.tombstone_at != null || row.expires_at <= Date.now()) return null;
       return { field: row.field, value: row.value, updatedAt: row.created_at };
     },

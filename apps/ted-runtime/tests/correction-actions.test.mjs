@@ -9,6 +9,7 @@ import { createGatewayServer } from '../src/server.mjs';
 import { correctionActionRegistry } from '../src/correction-actions.mjs';
 import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
 import { createUndoStore } from '../src/undo-store.mjs';
+import { recordCatalog, clearCatalog } from '../src/category-catalog.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 const identity = { workspaceId: 'w', actorId: 'a', deviceId: 'd', token: 'token' };
@@ -20,7 +21,7 @@ test('pending client projects real proposal response extras and supersedes with 
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
       const body = url.endsWith('/supersede')
-        ? { id: 'new-id', existing: false, supersedes: 'old-id' }
+        ? { id: 'new-id', existing: false, supersedes: 'old-id', version: 2, workspaceId: 'w', actorId: 'a', deviceId: 'd', tool: 'transactions.expense.create', normalizedArgs: { amountCents: 200 } }
         : { id: 'old-id', tool: 'transactions.expense.create', status: 'proposed', normalizedArgs: { amountCents: 100 }, proposalHash: 'a'.repeat(64), version: 2, bindings: {}, workspaceId: 'w', idempotencyKey: 'private-key', executionAttemptCount: 0, supersedesId: null };
       return { ok: true, status: 200, json: async () => body };
     },
@@ -39,6 +40,23 @@ test('pending client projects real proposal response extras and supersedes with 
     tool: 'transactions.expense.create', normalizedArgs: { amountCents: 200 },
     expectedProposalHash: 'a'.repeat(64),
   }));
+});
+
+test('pending client rejects malformed supersede response shapes', async () => {
+  const key = createHash('sha256').update('w:i:transactions.expense.create').digest('hex');
+  for (const response of [
+    { existing: false, supersedes: 'old-id' },
+    { id: 'new-id', existing: false, supersedes: 'other-id' },
+  ]) {
+    const client = createPendingClient({
+      apiBaseUrl: 'http://127.0.0.1:3001',
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => response }),
+    });
+    await assert.rejects(client.supersede({
+      ...identity, id: 'old-id', tool: 'transactions.expense.create',
+      normalizedArgs: { amountCents: 200 }, expectedProposalHash: 'a'.repeat(64), idempotencyKey: key,
+    }), PendingClientError);
+  }
 });
 
 test('pending client rejects malformed operation shapes without exposing response body', async () => {
@@ -157,6 +175,9 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
   store.setActiveOperation(conversation.conversationId, oldId, owner.actorId);
   const proposalIntents = createProposalIntentRegistry();
   const calls = [];
+  const remembered = [];
+  const categoryId = '00000000-0000-0000-0000-000000000002';
+  recordCatalog('runtime-correction', { items: [{ id: categoryId, name: 'Transporte', kind: 'expense' }] });
   const client = {
     async mintToken() { return 'signed-token'; },
     async get(input) {
@@ -175,9 +196,10 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
   };
   const gateway = createGatewayServer({
     resolveIdentity: async () => owner, store, proposalIntents, pendingClient: client,
+    categoryMemoryStoreOverride: { remember(input) { remembered.push(input); return true; }, close() {} },
     promptHost: { async chat({ sessionID }) {
       correctionActionRegistry.record(sessionID, {
-        action: 'correct', changed: { amountCents: 7500 }, intentionId: 'turn-intent',
+        action: 'correct', changed: { amountCents: 7500, categoryId }, intentionId: 'turn-intent',
       });
       proposalIntents.record(sessionID, { tool: 'transactions.expense.create', normalizedArgs: { amountCents: 1 } });
       return { turnId: 'turn', output: 'Atualizei a proposta.' };
@@ -207,7 +229,11 @@ test('gateway supersedes only a proposed owner operation, merges untouched args 
     });
     assert.equal(calls[2][1].expectedProposalHash, 'a'.repeat(64));
     assert.equal(store.get(conversation.conversationId, owner).activeOperationId, newId);
+    assert.equal(remembered.length, 1);
+    assert.equal(remembered[0].value, 'Transporte');
+    assert.notEqual(remembered[0].value, categoryId);
   } finally {
+    clearCatalog('runtime-correction');
     correctionActionRegistry.clear('runtime-correction');
     await gateway.close();
   }
@@ -455,3 +481,4 @@ test('loopback supersede 404 is typed, preserves activeOperationId, and never fa
   });
   function unused() {}
 });
+
