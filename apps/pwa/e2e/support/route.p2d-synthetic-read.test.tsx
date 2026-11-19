@@ -793,6 +793,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       const identity = "p2d-journey-c-real";
       const categoryAutoExecToken = "p2d-synthetic-category-autoexec-mint-token-only";
       const categoryTransportId = "22222222-2222-4222-8222-222222222224";
+      const createOnly = process.env.P2D_CATEGORY_CREATE_ONLY === "1";
       interface SqliteDb {
         prepare(sql: string): {
           all(...params: unknown[]): Array<{ target: string; field: string; value: string }>;
@@ -939,13 +940,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
                   tool: body.proposal.tool ?? null,
                   categoryId: body.proposal.normalizedArgs?.categoryId ?? null,
                   normalizedArgs: body.proposal.normalizedArgs
-                    ? Object.fromEntries(
-                        Object.entries(body.proposal.normalizedArgs)
-                          .slice(0, 8)
-                          .filter(([, value]) =>
-                            value === null || ["string", "number", "boolean"].includes(typeof value),
-                          ),
-                      )
+                    ? { ...body.proposal.normalizedArgs }
                     : null,
                 }
               : null,
@@ -970,6 +965,47 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         gatewayCookie = firstCookie!.split(";", 1)[0];
         const initialCategories = await getCategoryState();
         const initialMemoryCount = memoryState().count;
+        if (createOnly) {
+          const turn = await sendTurn(
+            "create-category-only",
+            "p2d-journey-c-create-only-01",
+            "Crie a categoria de despesa Palestras como categoria principal (raiz), sem categoria pai.",
+            initialMemoryCount,
+          );
+          const turnEvidence = evidence[0];
+          const proposal = turnEvidence.proposal as {
+            tool?: string | null;
+            normalizedArgs?: Record<string, unknown> | null;
+          } | null;
+          const normalizedArgs = proposal?.normalizedArgs ?? null;
+          const eligibleArgs = normalizedArgs !== null &&
+            Object.keys(normalizedArgs).sort().join(",") === "kind,name";
+          const autoexec = turnEvidence.autoexec as { status?: string } | null;
+          const classification = !eligibleArgs
+            ? "INCONCLUSIVE"
+            : autoexec === null
+              ? "FAIL"
+              : proposal?.tool === "categories.create" &&
+                turn.categories.palestrasCount === 1 &&
+                turn.categories.count === initialCategories.count + 1 &&
+                autoexec.status === "executed"
+                ? "PASS"
+                : "FAIL";
+          report.steps = [{
+            step: turnEvidence.step,
+            result: classification,
+            evidence: { ...turnEvidence, initialCategories },
+          }];
+          const stats = await serve.cmd("stats");
+          report.modelCalls = stats["promptCalls"] ?? "NOT_OBSERVED";
+          report.tokens = "NOT_OBSERVED";
+          testInfo.annotate({
+            type: "application/json",
+            description: "journey-c-real-evidence.json",
+            body: JSON.stringify(report, null, 2),
+          });
+          return;
+        }
         const turn1 = await sendTurn(
           "reuse-existing",
           "p2d-journey-c-real-01",
