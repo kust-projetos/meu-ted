@@ -810,6 +810,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       const root = approvedTmpRoot("ted-pwa-p2d-journey-c-real");
       const identity = "p2d-journey-c-real";
       const categoryAutoExecToken = "p2d-synthetic-category-autoexec-mint-token-only";
+      const pendingMintToken = "p2d-synthetic-pending-mint-token-only-32+";
       const categoryTransportId = "22222222-2222-4222-8222-222222222224";
       const createOnly = process.env.P2D_CATEGORY_CREATE_ONLY === "1";
       interface SqliteDb {
@@ -857,6 +858,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         false,
         "synthetic-delegation-signing-secret-value-32",
         { categoryAutoExecMintServiceToken: categoryAutoExecToken,
+          pendingMintServiceToken: pendingMintToken,
           pendingV2Store: createInMemoryPendingOperationV2Store(),
           pool: { async query(sql: string, values?: unknown[]) {
             if (sql.includes("FROM households")) return { rows: [{ id: HOUSEHOLD_A }], rowCount: 1 };
@@ -909,6 +911,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           TED_OPENCODE_P3_WRITES_ENABLED: "1",
           TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED: "1",
           TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN: categoryAutoExecToken,
+          TED_PENDING_MINT_TOKEN: pendingMintToken,
         });
         expect(serve.ready["mode"]).toBe("live-real");
         expect(serve.ready["credentialSource"]).toBe("allowlist");
