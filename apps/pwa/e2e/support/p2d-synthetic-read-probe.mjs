@@ -1080,12 +1080,27 @@ try {
     workspaceDeletionServiceToken: process.env.TED_WORKSPACE_DELETION_SERVICE_TOKEN ?? "",
     workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
   });
+  const autoExecEnabled = process.env.TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED === "1";
+  const categoryAutoExecMintToken = process.env.TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN ?? "";
+  let categoryAutoExecClient = null;
+  if (autoExecEnabled && categoryAutoExecMintToken.length >= 32) {
+    const { createAutoExecClient } = await mod("src/autoexec-client.mjs");
+    categoryAutoExecClient = createAutoExecClient({
+      apiBaseUrl,
+      allowedOrigins: [],
+      serviceToken: categoryAutoExecMintToken,
+      mintPath: "/auth/agent/category-autoexec-token",
+      serviceHeaderName: "x-agent-category-autoexec-service-token",
+    });
+  }
   gateway = createGatewayServer({
     resolveIdentity: ({ cookie, deviceToken, workspaceId }) =>
       resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId }),
     store,
     promptHost,
     pendingClient,
+    categoryAutoExecClient,
+    autoExecEnabled,
     workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
     stateDir: tedEnv.dirs.state,
     ...(process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1'
