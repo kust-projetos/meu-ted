@@ -945,6 +945,13 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
                 }
               : null,
             toolsOffered: Array.isArray(stats["financeToolNames"]) ? stats["financeToolNames"] : [],
+            categoryAutoExecEnabled: stats["categoryAutoExecEnabled"] ?? null,
+            categoryAutoExecClientPresent: stats["categoryAutoExecClientPresent"] ?? null,
+            proposalIntentFound: stats["proposalIntentFound"] ?? null,
+            intentEligible: stats["intentEligible"] ?? null,
+            correctionCandidatePresent: stats["correctionCandidatePresent"] ?? "NOT_OBSERVED",
+            lastPin: stats["lastPin"] ?? null,
+            wouldAttemptAutoexec: stats["wouldAttemptAutoexec"] ?? null,
             promptCalls: stats["promptCalls"] ?? null, transportCalls: stats["transportCalls"] ?? null,
             categoryCounts: categories, memoryCount: memory.count,
             memoryRows: memory.rows.map((row) => ({ target: row.target, field: row.field, value: row.value })),
