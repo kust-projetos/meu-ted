@@ -21,7 +21,7 @@ test('pending client projects real proposal response extras and supersedes with 
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
       const body = url.endsWith('/supersede')
-        ? { id: 'new-id', existing: false, supersedes: 'old-id' }
+        ? { id: 'new-id', existing: false, supersedes: 'old-id', version: 2, workspaceId: 'w', actorId: 'a', deviceId: 'd', tool: 'transactions.expense.create', normalizedArgs: { amountCents: 200 } }
         : { id: 'old-id', tool: 'transactions.expense.create', status: 'proposed', normalizedArgs: { amountCents: 100 }, proposalHash: 'a'.repeat(64), version: 2, bindings: {}, workspaceId: 'w', idempotencyKey: 'private-key', executionAttemptCount: 0, supersedesId: null };
       return { ok: true, status: 200, json: async () => body };
     },
@@ -40,6 +40,23 @@ test('pending client projects real proposal response extras and supersedes with 
     tool: 'transactions.expense.create', normalizedArgs: { amountCents: 200 },
     expectedProposalHash: 'a'.repeat(64),
   }));
+});
+
+test('pending client rejects malformed supersede response shapes', async () => {
+  const key = createHash('sha256').update('w:i:transactions.expense.create').digest('hex');
+  for (const response of [
+    { existing: false, supersedes: 'old-id' },
+    { id: 'new-id', existing: false, supersedes: 'other-id' },
+  ]) {
+    const client = createPendingClient({
+      apiBaseUrl: 'http://127.0.0.1:3001',
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => response }),
+    });
+    await assert.rejects(client.supersede({
+      ...identity, id: 'old-id', tool: 'transactions.expense.create',
+      normalizedArgs: { amountCents: 200 }, expectedProposalHash: 'a'.repeat(64), idempotencyKey: key,
+    }), PendingClientError);
+  }
 });
 
 test('pending client rejects malformed operation shapes without exposing response body', async () => {
