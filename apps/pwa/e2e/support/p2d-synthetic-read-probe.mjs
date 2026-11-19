@@ -28,6 +28,7 @@
 //   'fail-provider'   -> stub returns HTTP 500 for completions from now on
 //   'recover-provider'-> stub resumes the scripted tool_call/derived-text flow
 //   'close'           -> orderly close ({ phase:'serve-closed', ...counters })
+import { hasNonEmptyRecallItems } from "./p2d-recall-observation.mjs";
 //
 // Test-only observation seams (declared): promptCalls/messageLists counters
 // wrap the REAL 2.2.4 SDK (no behavior change); the finance transport is the
@@ -929,8 +930,7 @@ try {
                 categoryRecallCalls++;
                 const result = await execute(...args);
                 try {
-                  const value = typeof result === "string" ? JSON.parse(result) : result;
-                  if (Array.isArray(value?.items) && value.items.length > 0) categoryRecallReturnedValue = true;
+                  if (hasNonEmptyRecallItems(result)) categoryRecallReturnedValue = true;
                 } catch { /* response shape is not a non-empty recall result */ }
                 return result;
               },

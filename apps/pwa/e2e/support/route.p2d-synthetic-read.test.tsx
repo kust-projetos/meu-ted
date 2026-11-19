@@ -133,6 +133,7 @@ type AuthConfig = Parameters<typeof createBetterAuth>[0];
 import { createBetterAuth } from "../../../api/src/auth/better-auth.js";
 import { buildTestApp } from "../../../api/tests/test-app.js";
 import { createInMemoryPendingOperationV2Store } from "../../../api/src/approvals/pending-v2.js";
+import { hasNonEmptyRecallItems } from "./p2d-recall-observation.mjs";
 import {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -304,6 +305,17 @@ afterEach(() => {
 });
 
 describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK → stub provider → real finance tool → real API", () => {
+  it("observes recall items in plugin output and rejects empty items", () => {
+    expect(hasNonEmptyRecallItems({
+      output: { items: [{ field: "category", value: "Transporte" }] },
+      content: [{ type: "text", text: '{"items":[{"field":"category","value":"Transporte"}]}' }],
+    })).toBe(true);
+    expect(hasNonEmptyRecallItems({
+      output: { items: [] },
+      content: [{ type: "text", text: '{"items":[]}' }],
+    })).toBe(false);
+  });
+
   it("generates UUID Better-Auth user IDs for the category mint harness", async () => {
     const auth = createBetterAuth({
       database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
