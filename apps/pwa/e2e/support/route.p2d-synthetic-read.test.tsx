@@ -1049,6 +1049,18 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           "Gastei R$ 50,00 no mercado ontem no Nubank. Use uma categoria existente se fizer sentido.",
           initialMemoryCount,
         );
+        const turn1Proposal = evidence[0]["proposal"] as {
+          tool?: string | null;
+          normalizedArgs?: Record<string, unknown> | null;
+        } | null;
+        expect(turn1Proposal?.tool).toBe("transactions.expense.create");
+        expect(turn1Proposal?.normalizedArgs?.categoryId).toBe(CATEGORY_FOOD_A.id);
+        const pendingProposal = await post(pathFor("pending-operations", "propose"), {
+          tool: turn1Proposal!.tool,
+          intentionId: "p2d-journey-c-real-01",
+          normalizedArgs: turn1Proposal!.normalizedArgs,
+        });
+        expect(pendingProposal.status).toBe(200);
         expect(turn1.categories.count).toBe(initialCategories.count);
         expect(turn1.categories.palestrasCount).toBe(0);
         const existingExpenseCategoryIds = new Set([
@@ -1057,10 +1069,9 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           CATEGORY_SALARY_A.id,
           categoryTransportId,
         ]);
-        const turn1Proposal = evidence[0]["proposal"] as { tool?: string; categoryId?: string } | null;
         const turn1Classification = turn1Proposal
           ? turn1Proposal.tool === "transactions.expense.create" &&
-            existingExpenseCategoryIds.has(String(turn1Proposal.categoryId)) ? "PASS" : "FAIL"
+            existingExpenseCategoryIds.has(String(turn1Proposal.normalizedArgs?.categoryId)) ? "PASS" : "FAIL"
           : "INCONCLUSIVE";
 
         const turn2 = await sendTurn(
@@ -1079,7 +1090,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const turn3 = await sendTurn(
           "correct-category-preference",
           "p2d-journey-c-real-03",
-          "Corrija a categoria da proposta anterior para Transporte. Para despesas de mercado, prefiro sempre Transporte.",
+          "Corrija a categoria da despesa de mercado para Transporte. Para despesas de mercado, prefiro sempre Transporte.",
           turn2.memory.count,
         );
         expect(turn3.memory.count).toBeGreaterThan(turn2.memory.count);
