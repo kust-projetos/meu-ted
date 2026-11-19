@@ -914,7 +914,7 @@ try {
     };
   }
   const pluginDef = defineTedFinancePlugin(() => countingTransport, pluginOptions);
-  const originalSetup = pluginDef.setup.bind(pluginDef);
+  const origSetup = pluginDef.setup.bind(pluginDef);
   pluginDef.setup = async (ctx) => {
     const tool = ctx?.tool;
     if (tool && typeof tool.transform === "function") {
@@ -940,7 +940,7 @@ try {
         },
       }));
     }
-    return originalSetup(ctx);
+    return origSetup(ctx);
   };
   const instrumentedSetup = pluginDef.setup.bind(pluginDef);
   if (LIVE_MODE) {

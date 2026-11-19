@@ -1,9 +1,8 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, it } from "vitest";
 import { createInMemoryPendingOperationV2Store } from "../src/approvals/pending-v2.js";
 import { buildTestApp } from "./test-app.js";
 
-test("buildTestApp registers Pending V2 when the store is in test options", async () => {
+it("buildTestApp registers Pending V2 when the store is in test options", async () => {
   const { app } = buildTestApp({}, {
     pendingV2Store: createInMemoryPendingOperationV2Store(),
   });
@@ -16,7 +15,7 @@ test("buildTestApp registers Pending V2 when the store is in test options", asyn
       payload: {},
     });
 
-    assert.notEqual(response.statusCode, 404);
+    expect(response.statusCode).not.toBe(404);
   } finally {
     await app.close();
   }
