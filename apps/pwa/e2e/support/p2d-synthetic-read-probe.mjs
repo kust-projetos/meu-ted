@@ -859,6 +859,8 @@ try {
   let promptCalls = 0;
   let messageLists = 0;
   let transportCalls = 0;
+  let categoryRecallCalls = 0;
+  let categoryRecallReturnedValue = false;
   const financeReads = [];
   const realTransport = new HttpFinanceTransport({ baseUrl: apiBaseUrl, timeoutMs: 8000 });
   const countingTransport = async (args) => {
@@ -911,8 +913,37 @@ try {
     };
   }
   const pluginDef = defineTedFinancePlugin(() => countingTransport, pluginOptions);
+  const originalSetup = pluginDef.setup.bind(pluginDef);
+  pluginDef.setup = async (ctx) => {
+    const tool = ctx?.tool;
+    if (tool && typeof tool.transform === "function") {
+      const originalTransform = tool.transform.bind(tool);
+      tool.transform = (callback) => originalTransform((editor) => callback({
+        ...editor,
+        add(definition) {
+          if (definition?.name === "recall_category_preference" && typeof definition.execute === "function") {
+            const execute = definition.execute;
+            return editor.add({
+              ...definition,
+              async execute(...args) {
+                categoryRecallCalls++;
+                const result = await execute(...args);
+                try {
+                  const value = typeof result === "string" ? JSON.parse(result) : result;
+                  if (Array.isArray(value?.items) && value.items.length > 0) categoryRecallReturnedValue = true;
+                } catch { /* response shape is not a non-empty recall result */ }
+                return result;
+              },
+            });
+          }
+          return editor.add(definition);
+        },
+      }));
+    }
+    return originalSetup(ctx);
+  };
+  const instrumentedSetup = pluginDef.setup.bind(pluginDef);
   if (LIVE_MODE) {
-    const origSetup = pluginDef.setup.bind(pluginDef);
     pluginDef.setup = async (ctx) => {
       retryHookAvailable = !!(ctx && ctx.session && typeof ctx.session.hook === "function");
       if (retryHookAvailable) {
@@ -935,7 +966,7 @@ try {
           retryHookRegistered = false;
         }
       }
-      return origSetup(ctx);
+      return instrumentedSetup(ctx);
     };
   }
   await wirePlugin(oc, pluginDef);
@@ -1067,6 +1098,8 @@ try {
       assistantMessages,
       promptCalls,
       transportCalls,
+      categoryRecallCalls,
+      categoryRecallReturnedValue,
       stubTurns: chatRequests.length,
       financeReads: financeReads.map((r) => ({ route: r.route, method: r.method, statusCode: r.statusCode })),
     };
@@ -1178,6 +1211,7 @@ try {
             const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
+              categoryRecallCalls, categoryRecallReturnedValue,
               categoryAutoExecEnabled: autoExecEnabled,
               categoryAutoExecClientPresent: !!categoryAutoExecClient,
               intentEligible: "NOT_OBSERVED",

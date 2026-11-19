@@ -987,6 +987,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             lastPin: stats["lastPin"] ?? null,
             wouldAttemptAutoexecAssumingNoCorrection: stats["wouldAttemptAutoexecAssumingNoCorrection"] ?? null,
             promptCalls: stats["promptCalls"] ?? null, transportCalls: stats["transportCalls"] ?? null,
+            categoryRecallCalls: stats["categoryRecallCalls"] ?? null,
+            categoryRecallReturnedValue: stats["categoryRecallReturnedValue"] ?? null,
             categoryCounts: categories, memoryCount: memory.count,
             memoryRows: memory.rows.map((row) => ({ target: row.target, field: row.field, value: row.value })),
             autoexec: body.autoexec ?? null,
@@ -1121,7 +1123,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           beforeNewSession,
         );
         expect(turn4.memory.count).toBe(beforeNewSession);
-        expect(evidence[3].output).toMatch(/transporte/i);
+        expect(turn4.categoryRecallCalls).toBeGreaterThan(0);
+        expect(turn4.categoryRecallReturnedValue).toBe(true);
 
         const stats = await serve.cmd("stats");
         report.steps = [
@@ -1150,7 +1153,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             {
               step: evidence[3]["step"],
               result: turn4.memory.count === beforeNewSession &&
-                /transporte/i.test(String(evidence[3]["output"])) ? "PASS" : "FAIL",
+                Number(turn4.categoryRecallCalls) > 0 &&
+                turn4.categoryRecallReturnedValue === true ? "PASS" : "FAIL",
               evidence: evidence[3],
             },
           ];
