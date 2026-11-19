@@ -1177,6 +1177,7 @@ try {
               : "NOT_OBSERVED";
             const intentEligible = isAutoEligibleCategoryIntent(proposalIntent);
             const proposalIntentFound = !!proposalIntent;
+            const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
               categoryAutoExecEnabled: autoExecEnabled,
@@ -1184,10 +1185,11 @@ try {
               proposalIntentFound,
               intentEligible,
               correctionCandidatePresent,
+              correctionCandidateKnown,
               lastPin,
-              wouldAttemptAutoexec: autoExecEnabled && !!categoryAutoExecClient &&
-                lastPin === "b" && proposalIntentFound && intentEligible &&
-                !correctionCandidatePresent,
+              wouldAttemptAutoexecAssumingNoCorrection: autoExecEnabled &&
+                !!categoryAutoExecClient && lastPin === "b" &&
+                proposalIntentFound && intentEligible,
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
               stubUrlCounts: chatRequests.reduce((acc, r) => {
