@@ -1123,8 +1123,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           beforeNewSession,
         );
         expect(turn4.memory.count).toBe(beforeNewSession);
-        expect(turn4.categoryRecallCalls).toBeGreaterThan(0);
-        expect(turn4.categoryRecallReturnedValue).toBe(true);
+        expect(evidence[3].categoryRecallCalls).toBeGreaterThan(0);
+        expect(evidence[3].categoryRecallReturnedValue).toBe(true);
 
         const stats = await serve.cmd("stats");
         report.steps = [
@@ -1153,8 +1153,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             {
               step: evidence[3]["step"],
               result: turn4.memory.count === beforeNewSession &&
-                Number(turn4.categoryRecallCalls) > 0 &&
-                turn4.categoryRecallReturnedValue === true ? "PASS" : "FAIL",
+                Number(evidence[3].categoryRecallCalls) > 0 &&
+                evidence[3].categoryRecallReturnedValue === true ? "PASS" : "FAIL",
               evidence: evidence[3],
             },
           ];
