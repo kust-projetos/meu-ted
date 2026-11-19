@@ -21,7 +21,7 @@ alteração de capacidade exige autorização explícita e validação prévia.
 | `TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED` | `1` | processo TED Runtime | Detecta internamente uma correção. |
 | `TED_OPENCODE_CATEGORY_MEMORY_ENABLED` | `1` | processo TED Runtime | Habilita store SQLite local e tool de recall. |
 | `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` | processo TED Runtime + API elegível | Permite autoexecução da categoria via API, sujeita aos pré-requisitos abaixo. |
-| `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` | credencial, não flag; mínimo de 32 caracteres | perfil/ambiente do processo-filho | Credencial de serviço usada para obter token de autoexecução; nunca a grave em repositório ou instruções. |
+| `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` | credencial, não flag; mínimo de 32 caracteres | perfil/ambiente do processo-filho | Credencial dedicada à jornada de categorias; usa `mintPath='/auth/agent/category-autoexec-token'` e o header `x-agent-category-autoexec-service-token`. O token global `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` permanece ausente. Nunca grave credenciais em repositório ou instruções. |
 
 ### Valores no compose TED Runtime
 
@@ -42,9 +42,11 @@ Antes de habilitar `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED`, confirme:
 
 - A API tem `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED` habilitada e
   `TED_RISK_BASED_AUTOEXECUTE` em modo diferente de `off`/`shadow`.
-- O endpoint `POST /auth/agent/autoexec-token` está disponível.
-- O operador provisionou a credencial de serviço; injete-a por perfil/ambiente
-  no processo-filho, nunca no repositório, logs ou instruções.
+- O emissor dedicado `POST /auth/agent/category-autoexec-token` está
+  disponível para a jornada de categorias.
+- O operador provisionou `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN`; injete-a
+  por perfil/ambiente no processo-filho, nunca no repositório, logs ou
+  instruções. A jornada não usa credencial/token global.
 - A API permanece a única autoridade de execução. O modelo nunca vê
   capability, token ou `operationId`.
 
@@ -81,9 +83,8 @@ as flags ainda exigem autorização e provisionamento pelo operador.
 
 ## Invariantes e rollback
 
-- Não permitir dupla execução entre A0 e B: ownership pertence ao pin B,
-  usando a chave SHA-256 `workspace:intentionId:categories.create`.
-- Não desligar A0 nem alterar roteamento. O LLM não recebe autoridade para
+- O dono da conversa é o pin B. Garantir execução única pela chave SHA-256
+  `workspace:intentionId:categories.create`; o LLM não recebe autoridade para
   executar operações. Em falha, fechar para proposta pendente.
 - Nunca gravar segredo em Git, log ou relatório.
 - Para reverter, desligue a flag correspondente: retorna ao comportamento

@@ -11,7 +11,7 @@ No baseline de produção `9dc5d1c`:
   `TED_RISK_BASED_AUTOEXECUTE=on` (valor preexistente). Isso, isoladamente,
   não ativa a execução no gateway.
 - A autoexecução de `categories.create` permanece **inativa**. V2.1 não está
-  homologada integralmente: P5 segue inconclusiva, conforme
+  homologada integralmente: rodadas P5 posteriores falharam (FAIL), conforme
   [VALIDATION.md](VALIDATION.md) e [HOMOLOGATION.md](HOMOLOGATION.md).
 
 ## Pré-requisitos e limites
@@ -30,11 +30,11 @@ Antes de qualquer ativação, cumprir
 ## Sequência proposta
 
 1. Obter aprovação da homologação P5, com evidência de `/propose` e `/active`.
-   P5 permanece inconclusiva; os resultados sintéticos não substituem essa
+   P5 permanece FAIL; os resultados sintéticos não substituem essa
    aprovação.
 2. Validar deterministicamente a jornada C em ambiente sintético e registrar
-   evidência. O probe deve incluir
-   `proposalIntentFound`, `intentEligible` e
+   evidência. A resposta do gateway deve registrar `proposalObserved`; os
+   diagnósticos do probe podem incluir `intentEligible` e
    `wouldAttemptAutoexecAssumingNoCorrection`. Considerar os ajustes de
    instrumentação do probe em #452 e #453; estes não alteram produto ou
    política.
