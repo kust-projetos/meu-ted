@@ -304,6 +304,23 @@ afterEach(() => {
 });
 
 describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK → stub provider → real finance tool → real API", () => {
+  it("generates UUID Better-Auth user IDs for the category mint harness", async () => {
+    const auth = createBetterAuth({
+      database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
+      disableSignUp: false,
+      transaction: false,
+      secret: SECRET,
+      baseURL: "http://localhost:3001",
+      trustedOrigins: ["http://localhost:3000"],
+      advanced: { database: { generateId: "uuid" } },
+    });
+    const signup = await auth.api.signUpEmail({
+      body: { email: "ted-uuid-harness@example.test", password: "test-password-123", name: "Ted UUID Harness" },
+      headers: new Headers({ origin: "http://localhost:3000" }),
+    });
+    expect(signup.user.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
   it("chat → history reload → isolation → provider-fault replay → component remount → journal", async () => {
     const root = approvedTmpRoot("ted-pwa-p2dread");
 
@@ -822,6 +839,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         secret: SECRET,
         baseURL: "http://localhost:3001",
         trustedOrigins: ["http://localhost:3000"],
+        advanced: { database: { generateId: "uuid" } },
       });
       const built = buildTestApp(
         {
@@ -866,7 +884,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const sessionCookie = firstCookieSegment(signup.headers.get("set-cookie"));
         const session = await auth.api.getSession({ headers: new Headers({ cookie: sessionCookie }) });
         const actorId = String(session?.user.id ?? "");
-        expect(actorId).not.toBe("");
+        expect(actorId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
         memberships.set(`${actorId}:${HOUSEHOLD_A}`, "owner");
         await built.app.listen({ port: 0, host: "127.0.0.1" });
         const address = built.app.server.address() as { port: number };

@@ -520,7 +520,6 @@ try {
   const { resolveGatewayIdentity } = await mod("src/gateway.mjs");
   const { createConversationStore } = await mod("src/conversations.mjs");
   const { parseConversationCookie } = await mod("src/conversations.mjs");
-  const { proposalIntentRegistry } = await mod("src/proposal-intents.mjs");
   const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
   const { createPendingClient } = await mod("src/pending-client.mjs");

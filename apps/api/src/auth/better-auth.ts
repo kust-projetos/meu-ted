@@ -7,6 +7,7 @@ export type BetterAuthConfig = {
   databaseUrl?: string;
   pool?: Pool;
   database?: NonNullable<BetterAuthOptions['database']>;
+  advanced?: BetterAuthOptions['advanced'];
   disableSignUp?: boolean;
   transaction?: boolean;
   secret: string;
@@ -56,6 +57,7 @@ export const createBetterAuth = (config: BetterAuthConfig) => {
         sameSite: config.baseURL.startsWith('https://') ? 'none' : 'lax',
         secure: config.baseURL.startsWith('https://'),
       },
+      ...(config.advanced ?? {}),
     },
     database: config.database ?? {
       db: database,
