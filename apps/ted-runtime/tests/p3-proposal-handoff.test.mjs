@@ -78,6 +78,7 @@ describe('P3 proposal handoff', () => {
       const dto = await first.json();
       assert.equal(dto.status, 'completed');
       assert.deepEqual(dto.proposal, intent());
+      assert.equal(dto.proposalObserved, true);
       assert.equal(registry.size(), 0, 'the intent is consumed by the handoff');
     } finally {
       await gw.close();
@@ -91,7 +92,8 @@ describe('P3 proposal handoff', () => {
       const res = await chat(base, { text: 'Quais contas?', intentionId: 'm-1' });
       const dto = await res.json();
       assert.equal('proposal' in dto, false);
-      assert.deepEqual(Object.keys(dto).sort(), ['intentionId', 'output', 'status', 'turnId']);
+      assert.equal(dto.proposalObserved, false);
+      assert.deepEqual(Object.keys(dto).sort(), ['intentionId', 'output', 'proposalObserved', 'status', 'turnId']);
     } finally {
       await gw.close();
     }

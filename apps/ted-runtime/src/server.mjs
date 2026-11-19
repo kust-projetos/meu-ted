@@ -799,8 +799,10 @@ export function createGatewayServer({
       }
       let proposalForAutoexec = null;
       let canAutoexec = false;
+      let proposalObserved = false;
       if (autoExecEnabled && pin.pin === 'b' && !correctionCandidate) {
         proposalForAutoexec = proposalIntents.peek(runtimeSessionId);
+        proposalObserved = !!proposalForAutoexec;
         if (proposalForAutoexec) {
           const { isAutoEligibleCategoryIntent } = await import('./category-autoexec.mjs');
           canAutoexec = isAutoEligibleCategoryIntent(proposalForAutoexec);
@@ -864,6 +866,7 @@ export function createGatewayServer({
       // PWA POSTs it to the Agent broker; the gateway never mints, never
       // confirms, never executes.
       const proposalIntent = proposalIntents.take(runtimeSessionId);
+      proposalObserved = proposalObserved || !!proposalIntent;
       let deliveredProposal = proposalIntent;
       let autoexec;
       if (autoexecResult?.status === 'executed') {
@@ -872,7 +875,7 @@ export function createGatewayServer({
       } else if (autoexecResult?.reason === 'uncertain') {
         autoexec = { status: 'uncertain' };
       }
-      return { ...started,
+      return { ...started, proposalObserved,
         ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
         ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
     }).catch((e) => ({ __error: e }));
@@ -902,6 +905,7 @@ export function createGatewayServer({
         intentionId: body.intentionId,
         status: 'completed',
         output: outcome.output,
+        proposalObserved: outcome.proposalObserved,
         ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
         ...(outcome.autoexec ? { autoexec: outcome.autoexec } : {}),
       },

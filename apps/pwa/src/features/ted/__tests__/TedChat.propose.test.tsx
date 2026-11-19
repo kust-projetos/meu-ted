@@ -254,6 +254,7 @@ describe("TedChat — P3 proposal intent", () => {
     await send("Registre uma despesa de R$ 50 no mercado, na conta Nubank.");
 
     await screen.findByText(/Não foi possível preparar a proposta de despesa/);
+    expect(screen.getByRole("alert").getAttribute("data-proposal-error")).toBe("code:agent.proposal_failed");
     expect(screen.queryByRole("button", { name: /Confirmar R\$/ })).toBeNull();
   });
 
