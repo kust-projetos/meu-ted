@@ -181,3 +181,37 @@ it('maps Pending upstream HTTP statuses without exposing response details', asyn
   await assert.rejects(client.get({ ...identity, token:'t', id:opId }), error =>
     error.code === 'pending.upstream_429_get' && error.effectMayHaveOccurred === false);
 });
+
+
+it('reports specific safe codes for pending upstream failures', async (t) => {
+  let status = 200;
+  let responseBody = '{}';
+  const api = http.createServer((req, res) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(responseBody);
+  });
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => api.close(resolve)));
+  const client = createPendingClient({ apiBaseUrl: `http://127.0.0.1:${api.address().port}` });
+  const get = () => client.propose({ ...identity, token: 't', tool: 'categories.create', normalizedArgs: {} });
+  for (const [httpStatus, code] of [[422, 'pending.upstream_422_propose'], [410, 'pending.upstream_410_propose'], [418, 'pending.upstream_418_propose']]) {
+    status = httpStatus;
+    await assert.rejects(get(), error => error.code === code);
+  }
+  status = 302;
+  await assert.rejects(get(), error => error.code === 'pending.upstream_redirect_propose');
+  status = 200;
+  // Malformed JSON and non-object payloads must not be exposed.
+  responseBody = 'not-json';
+  await assert.rejects(get(), error => error.code === 'pending.upstream_invalid_body_propose' && !JSON.stringify(error).includes('not-json'));
+  responseBody = '[]';
+  await assert.rejects(get(), error => error.code === 'pending.upstream_invalid_body_propose');
+
+  const networkClient = createPendingClient({ apiBaseUrl: 'http://127.0.0.1:3001', fetchImpl: async () => { throw new Error('secret network detail'); } });
+  await assert.rejects(networkClient.propose({ ...identity, token: 't', tool: 'categories.create', normalizedArgs: {} }), error => error.code === 'pending.upstream_network_propose' && !JSON.stringify(error).includes('secret'));
+  const timeoutClient = createPendingClient({ apiBaseUrl: 'http://127.0.0.1:3001', timeoutMs: 1, fetchImpl: (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })) });
+  await assert.rejects(timeoutClient.propose({ ...identity, token: 't', tool: 'categories.create', normalizedArgs: {} }), error => error.code === 'pending.upstream_timeout_propose');
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(client.propose({ ...identity, token: 't', tool: 'categories.create', normalizedArgs: {}, signal: controller.signal }), error => error.code === 'pending.cancelled');
+});

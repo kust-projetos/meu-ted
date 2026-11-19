@@ -47,8 +47,21 @@ export function createPendingClient({ apiBaseUrl, allowedOrigins=[], pendingMint
     else { headers.authorization=`Bearer ${token}`; headers['x-workspace-id']=identity.workspaceId; headers['x-actor-id']=identity.actorId; headers['x-device-id']=identity.deviceId; }
     if(key) headers['Idempotency-Key']=key;
     const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),timeoutMs), joined=signal?AbortSignal.any([ctrl.signal,signal]):ctrl.signal;
-    try { const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined}); if(r.status>=300&&r.status<400) throw new PendingClientError(); const data=await r.json().catch(()=>null); if(!r.ok) { const code=r.status>=500?`pending.upstream_5xx_${upstreamOperation(path)}`:[400,401,403,404,409,429].includes(r.status)?`pending.upstream_${r.status}_${upstreamOperation(path)}`:'pending.upstream_error'; throw new PendingClientError(code,method!=='GET'&&r.status<500); } if(!data||typeof data!=='object') throw new PendingClientError(); return data; }
-    catch(e){ if(e instanceof PendingClientError) throw e; throw new PendingClientError(signal?.aborted?'pending.cancelled':'pending.upstream_error'); } finally{clearTimeout(timer);}
+    try {
+      const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined});
+      if(r.status>=300&&r.status<400) throw new PendingClientError(`pending.upstream_redirect_${upstreamOperation(path)}`);
+      if(!r.ok) {
+        const code=r.status>=500?`pending.upstream_5xx_${upstreamOperation(path)}`:`pending.upstream_${r.status}_${upstreamOperation(path)}`;
+        throw new PendingClientError(code,method!=='GET'&&r.status<500);
+      }
+      const data=await r.json().catch(()=>null);
+      if(!data||typeof data!=='object'||Array.isArray(data)) throw new PendingClientError(`pending.upstream_invalid_body_${upstreamOperation(path)}`);
+      return data;
+    } catch(e) {
+      if(e instanceof PendingClientError) throw e;
+      const code=signal?.aborted?'pending.cancelled':ctrl.signal.aborted?`pending.upstream_timeout_${upstreamOperation(path)}`:`pending.upstream_network_${upstreamOperation(path)}`;
+      throw new PendingClientError(code);
+    } finally{clearTimeout(timer);}
   }
   const scoped=x=>({workspaceId:x.workspaceId,actorId:x.actorId,deviceId:x.deviceId});
   const auth=x=>({token:x.token,identity:scoped(x),signal:x.signal});
