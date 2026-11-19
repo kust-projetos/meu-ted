@@ -1,16 +1,33 @@
 # Runbook — Paridade de flags do TED Runtime
 
 O PR #407 foi mergeado com CI verde; a emenda ao ADR-031, datada de
-2026-11-16, descreve esta paridade. As flags são `default-off` no runtime;
-o compose de produção habilita explicitamente prompt e memória de categoria,
-mantendo autoexecução desligada. Este runbook não autoriza produção: qualquer
-alteração de capacidade exige autorização explícita e validação prévia.
+2026-11-16, descreve esta paridade. As flags são `default-off` no runtime.
+O compose de produção habilita explicitamente prompt e memória de categoria;
+a autoexecução abaixo foi ativada com autorização do operador após homologação
+P5. Este runbook não autoriza novas alterações de capacidade.
 
-## Estado efetivo observado (2026-11-18)
+## Estado efetivo observado (2026-11-19)
 
-- Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`, `TED_OPENCODE_PRODUCT_PROMPT_ENABLED=1`, `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1`, `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`. O token dedicado de categoria está set; `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` está unset. Não registrar valores de credenciais.
-- API: `TED_RISK_BASED_AUTOEXECUTE=on` (preexistente), `PENDING_V2_SUPERSEDE_ENABLED=1` e `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`. Com a flag do gateway em `0`, não há cliente de autoexecução; `categories.create` autoexec não está ativa.
+- Histórico (2026-11-18): gateway com `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`;
+  não havia cliente de autoexecução e `categories.create` autoexec não estava ativa.
+- Estado atual (2026-11-19): gateway `ted-runtime:main` na imagem
+  `80e4a22f…` (correção #442), boot limpo; `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`
+  desde 2026-11-19, ativada com autorização do operador após homologação P5
+  (proposta 50 → correção 55 → confirmação → execução única → replay
+  idempotente, PR #456). Autoexecução está ativa apenas para `categories.create`;
+  `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` está ausente e o token dedicado de categoria
+  está provisionado. Não registrar valores de credenciais. A API é a autoridade.
+- API inalterada: `TED_RISK_BASED_AUTOEXECUTE=on`,
+  `PENDING_V2_SUPERSEDE_ENABLED=1` e
+  `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`.
 - Antes de qualquer redeploy ou mudança de flag, faça backup da configuração. `writeTedConfig` reconhece configurações geradas por versões anteriores com qualquer combinação de `p3Writes`, `productPrompt` e `categoryMemory` e as reescreve conforme as flags solicitadas; assim, uma transição não falha fechado apenas por existir um `opencode.json` gerado desatualizado. Um override nativo legítimo de `model` continua preservado. Edições arbitrárias do usuário e symlinks continuam recusados, sem sobrescrita/seguimento. Qualquer mudança de flag requer autorização explícita do operador.
+- Rollback: backup `docker-compose.yml.bak-pre-category-flip` restaura a
+  configuração anterior (flag `0`); também é possível usar
+  `ted-runtime:rollback-pre-9dc5d1c`. A jornada C com modelo real ainda não foi
+  homologada após o flip.
+- O gateway de produção não tem o fetch guard live-real do harness; as
+  correções do PR #456 são apenas do harness/runtime de teste e não rodam em
+  produção.
 
 ## Flags e escopo
 
@@ -20,7 +37,7 @@ alteração de capacidade exige autorização explícita e validação prévia.
 | `TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED` | `1` | processo TED Runtime | Valida nome e deduplica em `propose_category_create`; proposta assistida, sem autoexecução. |
 | `TED_OPENCODE_SUPERSEDE_DETECTION_ENABLED` | `1` | processo TED Runtime | Detecta internamente uma correção. |
 | `TED_OPENCODE_CATEGORY_MEMORY_ENABLED` | `1` | processo TED Runtime | Habilita store SQLite local e tool de recall. |
-| `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` | processo TED Runtime + API elegível | Permite autoexecução da categoria via API, sujeita aos pré-requisitos abaixo. |
+| `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` | processo TED Runtime + API elegível | Permite autoexecução de categoria, atualmente apenas `categories.create`, via API. |
 | `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` | credencial, não flag; mínimo de 32 caracteres | perfil/ambiente do processo-filho | Credencial dedicada à jornada de categorias; usa `mintPath='/auth/agent/category-autoexec-token'` e o header `x-agent-category-autoexec-service-token`. O token global `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` permanece ausente. Nunca grave credenciais em repositório ou instruções. |
 
 ### Valores no compose TED Runtime
@@ -29,8 +46,8 @@ O `docker/ted-runtime/docker-compose.yml` define:
 
 - `TED_OPENCODE_PRODUCT_PROMPT_ENABLED=1`: inclui as instruções de produto.
 - `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1`: habilita memória local e recall.
-- `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`: criação automática permanece
-  desligada; exige autorização de operador.
+- `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`: autoexecução de categoria está
+  ativa no gateway por autorização do operador; não habilita outras categorias.
 - `TED_PENDING_MINT_TOKEN` e `TED_WORKSPACE_DELETION_SERVICE_TOKEN` são
   credenciais opcionais no compose, mas necessárias para o corte das rotas de
   pending/atestado. Sem elas, essas rotas falham fechado. Nunca registre seus
@@ -93,5 +110,4 @@ as flags ainda exigem autorização e provisionamento pelo operador.
 
 ## Pendências operacionais
 
-- Provisionamento da credencial pelo operador.
-- Autorização explícita para canary/deploy; este runbook não a concede.
+- Homologar a jornada C com modelo real após o flip.
