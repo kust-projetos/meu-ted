@@ -6,6 +6,10 @@ test('fingerprint is stable, normalized and scoped', () => {
   const a = categoryMemoryFingerprint({ workspaceId: ' w ', actorId: 'a', target: ' café ', field: 'category' });
   assert.equal(a, categoryMemoryFingerprint({ workspaceId: 'w', actorId: 'a', target: 'café', field: 'category' }));
   assert.notEqual(a, categoryMemoryFingerprint({ workspaceId: 'x', actorId: 'a', target: 'café', field: 'category' }));
+  assert.equal(
+    categoryMemoryFingerprint({ workspaceId: 'w', actorId: 'a', target: 'Mercado', field: 'category' }),
+    categoryMemoryFingerprint({ workspaceId: 'w', actorId: 'a', target: 'mercado', field: 'category' }),
+  );
 });
 
 test('normalization rejects controls and secret-like values', () => {
