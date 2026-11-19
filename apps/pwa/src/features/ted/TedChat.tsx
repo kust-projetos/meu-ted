@@ -62,6 +62,16 @@ const proposalRecoveryError = (proposal?: ProposalIntent): string =>
   `Não foi possível recuperar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Recarregue a página para tentar novamente.`;
 const proposalBrokerError = (proposal?: ProposalIntent): string =>
   `Não foi possível preparar a proposta de ${proposal ? PROPOSAL_NOUN[proposal.tool] : "operação"}. Tente novamente.`;
+const safeProposalErrorDiagnostic = (error: unknown): string | null => {
+  if (!error || typeof error !== "object") return null;
+  const fields = error as { code?: unknown; status?: unknown };
+  if (typeof fields.code === "string" && /^[a-zA-Z0-9._-]{1,80}$/.test(fields.code)) {
+    return `code:${fields.code}`;
+  }
+  return typeof fields.status === "number" && Number.isInteger(fields.status)
+    ? `status:${fields.status}`
+    : null;
+};
 /**
  * FIX-AGENT-QUOTA-MESSAGE: the Agent relays the usage-gate denial verbatim as
  * 429 `agent.quota_exceeded` (the daily token budget, reset on the 24h window)
@@ -232,6 +242,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proposalErrorDiagnostic, setProposalErrorDiagnostic] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [status, setStatus] = useState<TedChatStatus>("ready");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -803,6 +814,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       text?.trim() ? messages.filter((m) => !m.isOwn && m.content === text).length : 0;
     setLoading(true);
     setError(null);
+    setProposalErrorDiagnostic(null);
     setStatus("streaming");
     // P2: abort wiring exists only for a server-confirmed B turn. A0/unknown
     // sends pass no signal — fetchWithAgentAuth still tracks the flight for
@@ -879,7 +891,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // Only now is the recovery anchor consumed — a lost broker response
           // keeps it for the next reload.
           clearPendingChatSend(sendWorkspaceId);
-        } catch {
+        } catch (err) {
           if (isStaleScope(sendWorkspaceId)) return;
           // No card is invented. The message stays retryable with the SAME
           // messageId, so a lost broker response can never duplicate the
@@ -887,6 +899,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
           // anchor keeps the intent for a broker-only retry or a reload.
           setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
           setError(proposalBrokerError(returnedProposal));
+          setProposalErrorDiagnostic(safeProposalErrorDiagnostic(err));
           setStatus("error");
           return;
         }
@@ -1034,6 +1047,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   ): Promise<void> => {
     setLoading(true);
     setError(null);
+    setProposalErrorDiagnostic(null);
     setStatus("streaming");
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sending" as const } : m)));
     try {
@@ -1042,10 +1056,11 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       clearPendingChatSend(scopeId);
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "sent" as const } : m)));
       await loadHistory();
-    } catch {
+    } catch (err) {
       if (isStaleScope(scopeId)) return;
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, delivery: "failed" as const } : m)));
       setError(proposalBrokerError(proposal));
+      setProposalErrorDiagnostic(safeProposalErrorDiagnostic(err));
       setStatus("error");
     } finally {
       if (!isStaleScope(scopeId)) setLoading(false);
@@ -1353,7 +1368,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             </div>
           )}
 
-          {error && <div role="alert" className="my-3 rounded-[14px] border border-danger/30 bg-danger-tint px-3.5 py-2.5 text-xs font-semibold text-danger">{error}</div>}
+          {error && <div role="alert" data-proposal-error={proposalErrorDiagnostic ?? undefined} className="my-3 rounded-[14px] border border-danger/30 bg-danger-tint px-3.5 py-2.5 text-xs font-semibold text-danger">{error}</div>}
 
           {/* approval-card-overlap: the live-tail sentinel carries a bottom
               scroll-margin ≥ the fixed BottomNav height (`--tab-bar-height`

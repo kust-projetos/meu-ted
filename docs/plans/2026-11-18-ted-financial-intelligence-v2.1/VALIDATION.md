@@ -175,3 +175,32 @@ Nenhuma flag de produção foi alterada e nenhum deploy foi realizado nesta miss
 - **Diagnóstico direto** (sem Playwright, LLM paga ou retries; uma rodada): **55/55 testes passaram** — ciclo de integração API **7/7** (Fastify + gateway loopback: 200/201/400/403/409, incluindo `validation.error` e `agent.workspace_not_empty`); supersede/idempotência de aprovações **23/23** (replay 201/200, `pending.supersede_disabled` 404 e códigos `approval.*`/`idempotency.conflict`); correção/proposta/recuperação do runtime **25/25** (correções 200 sem fallback; recuperação 502/409/200 com um prompt). **Nenhum defeito funcional foi comprovado.**
 
 **Conclusão:** contratos financeiros estão intactos na camada sintética. P5 com LLM real permanece **FAIL**, de causa indeterminada e sem atribuição a componente. Homologação com LLM real, smoke autenticado da UI e aprendizado de categoria continuam pendentes. Produção permaneceu inalterada: sem deploy ou alteração de flags. Os commits de merge #437, #438, #442, #443 e #444 estão em `main`.
+
+## Atualização factual (2026-11-19)
+
+As classificações **INCONCLUSIVE** acima preservam o histórico das rodadas
+anteriores. Rodadas posteriores de P5 em 19/11 terminaram em **FAIL**, com
+evidência de falha da UI registrada na issue #440; não reclassificar essas
+execuções como INCONCLUSIVE. A causa não é atribuída aqui. **V2.1 não está
+homologada**, e nenhuma homologação com LLM real foi realizada nesta missão.
+
+O fix de boot #442 (`writeTedConfig`, merge `f58143b`) está integrado em
+`main`, mas **não publicado**. A flag
+`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` permanece inalterada. Publicar #442
+exige autorização explícita separada; a correção de boot não depende da
+homologação P5.
+
+### Plano de publicação de #442 (não executado)
+
+Após autorização do operador:
+
+1. Verificar a versão atual da imagem antes de qualquer ação.
+2. Preservar backups de `opencode.json` e das flags atuais.
+3. Manter `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` e todas as demais flags
+   inalteradas.
+4. Após publicar, validar health, boot sem as 14 falhas de `writeTedConfig` e
+   acesso autenticado.
+5. Preservar o rollback `ted-runtime:rollback-pre-9dc5d1c` e os backups
+   `opencode.json.bak-pre-9dc5d1c` e `opencode.json.bak-pre-79d8b09`.
+
+Este plano não autoriza publicação, acesso à VPS nem mudança de configuração.

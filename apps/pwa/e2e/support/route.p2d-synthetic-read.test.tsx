@@ -926,6 +926,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             status?: string;
             intentionId?: string;
             output?: string;
+            proposalObserved?: boolean;
             autoexec?: unknown;
             proposal?: { tool?: string; normalizedArgs?: Record<string, unknown> };
           };
@@ -944,11 +945,10 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
                     : null,
                 }
               : null,
+            proposalObserved: body.proposalObserved ?? null,
             toolsOffered: Array.isArray(stats["financeToolNames"]) ? stats["financeToolNames"] : [],
             categoryAutoExecEnabled: stats["categoryAutoExecEnabled"] ?? null,
             categoryAutoExecClientPresent: stats["categoryAutoExecClientPresent"] ?? null,
-            proposalIntentFound: stats["proposalIntentFound"] ?? null,
-            proposalIntentSessionMatched: stats["proposalIntentSessionMatched"] ?? null,
             intentEligible: stats["intentEligible"] ?? null,
             correctionCandidatePresent: stats["correctionCandidatePresent"] ?? "NOT_OBSERVED",
             correctionCandidateKnown: stats["correctionCandidateKnown"] ?? false,

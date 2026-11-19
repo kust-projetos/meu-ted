@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 type NetworkEvent = {
   method: string;
   route: string;
@@ -82,6 +85,12 @@ export function createNetworkReport(page: {
     },
     stop() {
       page.off("response", listener);
+    },
+    async write(filePath: string) {
+      const report = await this.report();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify(report, null, 2), "utf8");
+      return filePath;
     },
   };
 }

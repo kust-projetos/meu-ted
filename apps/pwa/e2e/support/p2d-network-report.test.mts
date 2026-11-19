@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { createNetworkReport } from "./p2d-network-report.mts";
 
@@ -68,6 +71,30 @@ test("captures the gateway error code from an unsuccessful response", async () =
   assert.equal(result.events[0]?.code, "pending.upstream_403_propose");
   assert.equal(result.events[0]?.stage, "propose");
   assert.equal(result.events[0]?.route, "/rpc/pending-operations/propose");
+  report.stop();
+});
+
+test("writes a simulated failure report under test-results with only approved fields", async () => {
+  const page = new MockPage();
+  const report = createNetworkReport(page);
+  await page.emit(response("/rpc/pending-operations/propose", 502, {
+    code: "pending.upstream_403_propose",
+    email: "private@example.test",
+    amountCents: 98765,
+  }));
+  const output = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../test-results/p5-network-report-deterministic.json");
+  await report.write(output);
+  const saved = JSON.parse(await fs.readFile(output, "utf8"));
+  assert.deepEqual(saved.events[0], {
+    method: "POST",
+    route: "/rpc/pending-operations/propose",
+    status: 502,
+    stage: "propose",
+    durationMs: 12,
+    code: "pending.upstream_403_propose",
+  });
+  assert.equal(JSON.stringify(saved).includes("private@example.test"), false);
+  assert.equal(JSON.stringify(saved).includes("98765"), false);
   report.stop();
 });
 
