@@ -961,7 +961,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const turn1 = await sendTurn(
           "reuse-existing",
           "p2d-journey-c-real-01",
-          "Gastei R$ 50,00 no mercado ontem. Use uma categoria existente se fizer sentido.",
+          "Gastei R$ 50,00 no mercado ontem no Nubank. Use uma categoria existente se fizer sentido.",
           initialMemoryCount,
         );
         expect(turn1.categories.count).toBe(initialCategories.count);
@@ -1017,7 +1017,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const turn4 = await sendTurn(
           "new-session-recall",
           "p2d-journey-c-real-04",
-          "Gastei R$ 30,00 no mercado ontem.",
+          "Gastei R$ 30,00 no mercado ontem no Nubank.",
           beforeNewSession,
         );
         expect(turn4.memory.count).toBe(beforeNewSession);
