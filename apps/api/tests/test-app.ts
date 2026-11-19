@@ -36,6 +36,7 @@ export type TestAppOptions = {
   clock?: () => Date;
   pendingMintServiceToken?: string;
   categoryAutoExecMintServiceToken?: string;
+  pendingV2Store?: PendingOperationV2Store;
   agentAuthServiceToken?: string;
   pool?: { query(text: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }> } | null;
 };

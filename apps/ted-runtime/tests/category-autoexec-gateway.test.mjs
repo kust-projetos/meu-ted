@@ -128,6 +128,18 @@ test('gateway autoexec only executes eligible intents on enabled B pin and prese
   assert.doesNotMatch(JSON.stringify(pending.payload), new RegExp(secret));
   assert.equal(pending.intention.status, 'completed');
   assert.equal(pending.proposalIntents.size(), 0);
+
+  const failedClient = {
+    calls: { mint: 0, propose: 0, authorize: 0, execute: 0 },
+    async mint() { this.calls.mint++; throw new Error('synthetic mint failure'); },
+  };
+  const failed = await turn({ enabled: true, client: failedClient });
+  assert.deepEqual(failed.payload.autoexec, { status: 'left_pending', reason: 'autoexec_failed' });
+  assert.deepEqual(failed.payload.proposal, category);
+  assert.equal(failedClient.calls.mint, 1);
+  assert.equal(failedClient.calls.execute, 0);
+  assert.equal(failed.payload.promptCalls, undefined);
+  assert.equal(failed.proposalIntents.size(), 0);
 });
 
 test('existing proposal is delivered without authorize or execute', async () => {

@@ -872,9 +872,11 @@ export function createGatewayServer({
       if (autoexecResult?.status === 'executed') {
           autoexec = { status: 'executed' };
           deliveredProposal = null;
-      } else if (autoexecResult?.reason === 'uncertain') {
-        autoexec = { status: 'uncertain' };
-      }
+       } else if (autoexecResult?.reason === 'uncertain') {
+         autoexec = { status: 'uncertain' };
+       } else if (autoexecResult) {
+         autoexec = { status: 'left_pending', reason: autoexecResult.reason };
+       }
       return { ...started, proposalObserved,
         ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
         ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };

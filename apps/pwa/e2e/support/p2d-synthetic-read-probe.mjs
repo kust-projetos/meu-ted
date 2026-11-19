@@ -522,7 +522,6 @@ try {
   const { parseConversationCookie } = await mod("src/conversations.mjs");
   const { proposalIntentRegistry } = await mod("src/proposal-intents.mjs");
   const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
-  const { isAutoEligibleCategoryIntent } = await mod("src/category-autoexec.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
   const { createPendingClient } = await mod("src/pending-client.mjs");
   const { bindSession, revokeSession, getBinding, isSameHost, rotateSessionBinding } =
@@ -1170,24 +1169,19 @@ try {
         if (!line) continue;
         try {
           if (line === "stats") {
-            const proposalIntent = proposalIntentRegistry.peek(statsSessionID);
-            // Use only a non-consuming inspection API; never call take().
             const correctionCandidatePresent = typeof correctionActionRegistry.peek === "function"
               ? !!correctionActionRegistry.peek(statsSessionID)
               : "NOT_OBSERVED";
-            const intentEligible = isAutoEligibleCategoryIntent(proposalIntent);
             const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
               categoryAutoExecEnabled: autoExecEnabled,
               categoryAutoExecClientPresent: !!categoryAutoExecClient,
-              intentEligible,
+              intentEligible: "NOT_OBSERVED",
               correctionCandidatePresent,
               correctionCandidateKnown,
               lastPin,
-              wouldAttemptAutoexecAssumingNoCorrection: autoExecEnabled &&
-                !!categoryAutoExecClient && lastPin === "b" &&
-                !!proposalIntent && intentEligible,
+              wouldAttemptAutoexecAssumingNoCorrection: "NOT_OBSERVED",
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
               stubUrlCounts: chatRequests.reduce((acc, r) => {

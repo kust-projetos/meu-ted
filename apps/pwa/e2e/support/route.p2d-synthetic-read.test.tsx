@@ -132,6 +132,7 @@ const { memoryAdapter } = (await import(pathToFileURL(memoryAdapterPath).href)) 
 type AuthConfig = Parameters<typeof createBetterAuth>[0];
 import { createBetterAuth } from "../../../api/src/auth/better-auth.js";
 import { buildTestApp } from "../../../api/tests/test-app.js";
+import { createInMemoryPendingOperationV2Store } from "../../../api/src/approvals/pending-v2.js";
 import {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -836,7 +837,16 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         auth,
         workspaceAccess,
         false,
-        { categoryAutoExecMintServiceToken: categoryAutoExecToken },
+        "synthetic-delegation-signing-secret-value-32",
+        { categoryAutoExecMintServiceToken: categoryAutoExecToken,
+          pendingV2Store: createInMemoryPendingOperationV2Store(),
+          pool: { async query(sql: string, values?: unknown[]) {
+            if (sql.includes("FROM households")) return { rows: [{ id: HOUSEHOLD_A }], rowCount: 1 };
+            if (sql.includes("FROM invites")) return { rows: [], rowCount: 0 };
+            if (sql.includes("FROM device_tokens")) return { rows: [{ device_id: values?.[0] }], rowCount: 1 };
+            return { rows: [], rowCount: 0 };
+          } },
+        },
       );
       let serve: ServeProc | null = null;
       let categoryDb: SqliteDb | null = null;
