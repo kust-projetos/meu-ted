@@ -926,7 +926,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             intentionId?: string;
             output?: string;
             autoexec?: unknown;
-            proposal?: { tool?: string; normalizedArgs?: { categoryId?: string } };
+            proposal?: { tool?: string; normalizedArgs?: Record<string, unknown> };
           };
           const stats = await serve!.cmd("stats");
           const categories = await getCategoryState();
@@ -935,7 +935,19 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             step, httpStatus: response.status, status: body.status ?? null, intentionId,
             output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 200),
             proposal: body.proposal
-              ? { tool: body.proposal.tool ?? null, categoryId: body.proposal.normalizedArgs?.categoryId ?? null }
+              ? {
+                  tool: body.proposal.tool ?? null,
+                  categoryId: body.proposal.normalizedArgs?.categoryId ?? null,
+                  normalizedArgs: body.proposal.normalizedArgs
+                    ? Object.fromEntries(
+                        Object.entries(body.proposal.normalizedArgs)
+                          .slice(0, 8)
+                          .filter(([, value]) =>
+                            value === null || ["string", "number", "boolean"].includes(typeof value),
+                          ),
+                      )
+                    : null,
+                }
               : null,
             toolsOffered: Array.isArray(stats["financeToolNames"]) ? stats["financeToolNames"] : [],
             promptCalls: stats["promptCalls"] ?? null, transportCalls: stats["transportCalls"] ?? null,
@@ -981,7 +993,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const turn2 = await sendTurn(
           "create-category",
           "p2d-journey-c-real-02",
-          "Crie a categoria de despesa Palestras para uma despesa futura.",
+          "Crie a categoria de despesa Palestras como categoria principal (raiz), sem categoria pai, para uma despesa futura.",
           turn1.memory.count,
         );
         const turn2CategoryCount = turn2.categories.count;
