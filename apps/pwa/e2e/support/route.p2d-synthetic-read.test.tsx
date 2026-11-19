@@ -948,6 +948,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             categoryAutoExecEnabled: stats["categoryAutoExecEnabled"] ?? null,
             categoryAutoExecClientPresent: stats["categoryAutoExecClientPresent"] ?? null,
             proposalIntentFound: stats["proposalIntentFound"] ?? null,
+            proposalIntentSessionMatched: stats["proposalIntentSessionMatched"] ?? null,
             intentEligible: stats["intentEligible"] ?? null,
             correctionCandidatePresent: stats["correctionCandidatePresent"] ?? "NOT_OBSERVED",
             correctionCandidateKnown: stats["correctionCandidateKnown"] ?? false,
