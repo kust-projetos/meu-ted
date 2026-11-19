@@ -521,6 +521,20 @@ try {
   const { createConversationStore } = await mod("src/conversations.mjs");
   const { parseConversationCookie } = await mod("src/conversations.mjs");
   const { proposalIntentRegistry } = await mod("src/proposal-intents.mjs");
+  let capturedToolSessionID = null;
+  let proposalIntentSessionMatched = false;
+  const originalProposalIntentRecord = proposalIntentRegistry.record.bind(proposalIntentRegistry);
+  const originalProposalIntentPeek = proposalIntentRegistry.peek.bind(proposalIntentRegistry);
+  proposalIntentRegistry.record = function record(sessionID, intent) {
+    capturedToolSessionID = sessionID;
+    return originalProposalIntentRecord(sessionID, intent);
+  };
+  proposalIntentRegistry.peek = function peek(sessionID) {
+    const intent = originalProposalIntentPeek(sessionID);
+    proposalIntentSessionMatched = !!intent;
+    if (intent || !capturedToolSessionID) return intent;
+    return originalProposalIntentPeek(capturedToolSessionID);
+  };
   const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
   const { isAutoEligibleCategoryIntent } = await mod("src/category-autoexec.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
@@ -1183,6 +1197,7 @@ try {
               categoryAutoExecEnabled: autoExecEnabled,
               categoryAutoExecClientPresent: !!categoryAutoExecClient,
               proposalIntentFound,
+              proposalIntentSessionMatched,
               intentEligible,
               correctionCandidatePresent,
               correctionCandidateKnown,
