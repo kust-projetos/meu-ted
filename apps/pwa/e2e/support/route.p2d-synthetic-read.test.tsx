@@ -833,6 +833,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       vi.stubEnv("NODE_ENV", "test");
       vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
       vi.stubEnv("PENDING_V2_CATEGORY_AUTOCREATE_ENABLED", "1");
+      vi.stubEnv("PENDING_V2_SUPERSEDE_ENABLED", "1");
       const auth = createBetterAuth({
         database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
         disableSignUp: false,
@@ -966,7 +967,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           const memory = memoryState();
           const turn = {
             step, httpStatus: response.status, status: body.status ?? null, intentionId,
-            output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 200),
+            output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 400),
             proposal: body.proposal
               ? {
                   tool: body.proposal.tool ?? null,
