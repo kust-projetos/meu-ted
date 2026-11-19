@@ -54,6 +54,7 @@ export const LIVE_REAL_FETCH_GUARD = "live-real-allowlist";
 export const LIVE_REAL_API_ROUTES = Object.freeze([
   "POST /auth/agent-token",
   "POST /auth/agent/pending-token",
+  "POST /auth/agent/category-autoexec-token",
   "GET /pending-operations/v2/active",
   "POST /pending-operations/v2/propose",
   "POST /pending-operations/undo",
@@ -84,6 +85,7 @@ export const LIVE_REAL_API_ROUTES = Object.freeze([
 
 const BUDGET_TRENDS_ROUTE_RE = /^GET \/budgets\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/trends$/;
 const PENDING_V2_ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const PENDING_V2_AUTHORIZE_ROUTE_RE = new RegExp(`^POST \\/pending-operations\\/v2\\/${PENDING_V2_ID}\\/authorize$`);
 const PENDING_V2_ID_ROUTE_RE = new RegExp(`^(?:GET \\/pending-operations\\/v2\\/${PENDING_V2_ID}(?:\\/outcome)?|POST \\/pending-operations\\/v2\\/${PENDING_V2_ID}\\/(?:supersede|confirm|authorize|execute|retry|cancel))$`);
 const PENDING_V2_HEADERS = Object.freeze([
   "authorization", "x-workspace-id", "x-actor-id", "x-device-id",
@@ -108,6 +110,7 @@ const READ_HEADERS = Object.freeze(["x-device-token", "x-workspace-id", "accept"
 const API_ROUTE_HEADERS = new Map([
   ["POST /auth/agent-token", Object.freeze(["cookie", "x-workspace-id", "x-device-token", "content-type", "accept"])],
   ["POST /auth/agent/pending-token", Object.freeze(["content-type", "accept", "x-agent-pending-service-token"])],
+  ["POST /auth/agent/category-autoexec-token", Object.freeze(["content-type", "accept", "x-agent-category-autoexec-service-token"])],
   ["GET /auth/devices/me", Object.freeze(["x-device-token", "accept"])],
   ["GET /accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /cards/accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
@@ -366,7 +369,9 @@ function classifyApi(input, init, parsed, method) {
       if (
         !/^application\/json\b/i.test(String(contentType ?? "").trim()) ||
         !parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
-        Object.keys(parsed).length === 0
+        (PENDING_V2_AUTHORIZE_ROUTE_RE.test(route)
+          ? Object.keys(parsed).length !== 0
+          : Object.keys(parsed).length === 0)
       ) return { action: "deny", reason: "api_body" };
     } else if (body !== null && body !== undefined) {
       return { action: "deny", reason: "api_body" };
@@ -388,6 +393,28 @@ function classifyApi(input, init, parsed, method) {
       parsed = null;
     }
     const keys = ["workspaceId", "actorId", "deviceId", "requestId"];
+    if (
+      !/^application\/json\b/i.test(String(contentType ?? "").trim()) ||
+      typeof serviceToken !== "string" || serviceToken.length === 0 ||
+      !parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+      Object.keys(parsed).length !== keys.length ||
+      !keys.every((key) => Object.hasOwn(parsed, key) && typeof parsed[key] === "string" && parsed[key].length > 0)
+    ) return { action: "deny", reason: "api_body" };
+  } else if (route === "POST /auth/agent/category-autoexec-token") {
+    const contentType =
+      headerValue(init && init.headers, "content-type") ??
+      (isRequestLike(input) ? headerValue(input.headers, "content-type") : null);
+    const serviceToken =
+      headerValue(init && init.headers, "x-agent-category-autoexec-service-token") ??
+      (isRequestLike(input) ? headerValue(input.headers, "x-agent-category-autoexec-service-token") : null);
+    const text = bodyText(body);
+    let parsed;
+    try {
+      parsed = typeof text === "string" ? JSON.parse(text) : null;
+    } catch {
+      parsed = null;
+    }
+    const keys = ["workspaceId", "actorId", "deviceId", "intentionId"];
     if (
       !/^application\/json\b/i.test(String(contentType ?? "").trim()) ||
       typeof serviceToken !== "string" || serviceToken.length === 0 ||

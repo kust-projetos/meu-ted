@@ -28,6 +28,7 @@
 //   'fail-provider'   -> stub returns HTTP 500 for completions from now on
 //   'recover-provider'-> stub resumes the scripted tool_call/derived-text flow
 //   'close'           -> orderly close ({ phase:'serve-closed', ...counters })
+import { hasNonEmptyRecallItems } from "./p2d-recall-observation.mjs";
 //
 // Test-only observation seams (declared): promptCalls/messageLists counters
 // wrap the REAL 2.2.4 SDK (no behavior change); the finance transport is the
@@ -520,9 +521,7 @@ try {
   const { resolveGatewayIdentity } = await mod("src/gateway.mjs");
   const { createConversationStore } = await mod("src/conversations.mjs");
   const { parseConversationCookie } = await mod("src/conversations.mjs");
-  const { proposalIntentRegistry } = await mod("src/proposal-intents.mjs");
   const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
-  const { isAutoEligibleCategoryIntent } = await mod("src/category-autoexec.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
   const { createPendingClient } = await mod("src/pending-client.mjs");
   const { bindSession, revokeSession, getBinding, isSameHost, rotateSessionBinding } =
@@ -734,10 +733,14 @@ try {
   // - live-real: the product live config exactly (credential stays in env).
   const fs = await import("node:fs");
   const p3Writes = process.env.TED_OPENCODE_P3_WRITES_ENABLED === "1";
+  const productPrompt = process.env.TED_OPENCODE_PRODUCT_PROMPT_ENABLED === "1";
+  const categoryMemory = process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === "1";
   if (MODE === "live-real") {
-    writeTedConfig(iso.dirs.config, "live", { p3Writes });
+    writeTedConfig(iso.dirs.config, "live", { p3Writes, productPrompt, categoryMemory });
   } else {
-    const base = MODE === "offline" ? tedConfig("live", { p3Writes }) : tedConfig(undefined, { p3Writes });
+    const base = MODE === "offline"
+      ? tedConfig("live", { p3Writes, productPrompt, categoryMemory })
+      : tedConfig(undefined, { p3Writes, productPrompt, categoryMemory });
     const cfg = MODE === "offline"
       ? buildOfflineProviderConfig(base, {
           model: MODEL,
@@ -857,6 +860,8 @@ try {
   let promptCalls = 0;
   let messageLists = 0;
   let transportCalls = 0;
+  let categoryRecallCalls = 0;
+  let categoryRecallReturnedValue = false;
   const financeReads = [];
   const realTransport = new HttpFinanceTransport({ baseUrl: apiBaseUrl, timeoutMs: 8000 });
   const countingTransport = async (args) => {
@@ -909,8 +914,36 @@ try {
     };
   }
   const pluginDef = defineTedFinancePlugin(() => countingTransport, pluginOptions);
+  const origSetup = pluginDef.setup.bind(pluginDef);
+  pluginDef.setup = async (ctx) => {
+    const tool = ctx?.tool;
+    if (tool && typeof tool.transform === "function") {
+      const originalTransform = tool.transform.bind(tool);
+      tool.transform = (callback) => originalTransform((editor) => callback({
+        ...editor,
+        add(definition) {
+          if (definition?.name === "recall_category_preference" && typeof definition.execute === "function") {
+            const execute = definition.execute;
+            return editor.add({
+              ...definition,
+              async execute(...args) {
+                categoryRecallCalls++;
+                const result = await execute(...args);
+                try {
+                  if (hasNonEmptyRecallItems(result)) categoryRecallReturnedValue = true;
+                } catch { /* response shape is not a non-empty recall result */ }
+                return result;
+              },
+            });
+          }
+          return editor.add(definition);
+        },
+      }));
+    }
+    return origSetup(ctx);
+  };
+  const instrumentedSetup = pluginDef.setup.bind(pluginDef);
   if (LIVE_MODE) {
-    const origSetup = pluginDef.setup.bind(pluginDef);
     pluginDef.setup = async (ctx) => {
       retryHookAvailable = !!(ctx && ctx.session && typeof ctx.session.hook === "function");
       if (retryHookAvailable) {
@@ -933,7 +966,7 @@ try {
           retryHookRegistered = false;
         }
       }
-      return origSetup(ctx);
+      return instrumentedSetup(ctx);
     };
   }
   await wirePlugin(oc, pluginDef);
@@ -1065,6 +1098,8 @@ try {
       assistantMessages,
       promptCalls,
       transportCalls,
+      categoryRecallCalls,
+      categoryRecallReturnedValue,
       stubTurns: chatRequests.length,
       financeReads: financeReads.map((r) => ({ route: r.route, method: r.method, statusCode: r.statusCode })),
     };
@@ -1170,24 +1205,20 @@ try {
         if (!line) continue;
         try {
           if (line === "stats") {
-            const proposalIntent = proposalIntentRegistry.peek(statsSessionID);
-            // Use only a non-consuming inspection API; never call take().
             const correctionCandidatePresent = typeof correctionActionRegistry.peek === "function"
               ? !!correctionActionRegistry.peek(statsSessionID)
               : "NOT_OBSERVED";
-            const intentEligible = isAutoEligibleCategoryIntent(proposalIntent);
             const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
+              categoryRecallCalls, categoryRecallReturnedValue,
               categoryAutoExecEnabled: autoExecEnabled,
               categoryAutoExecClientPresent: !!categoryAutoExecClient,
-              intentEligible,
+              intentEligible: "NOT_OBSERVED",
               correctionCandidatePresent,
               correctionCandidateKnown,
               lastPin,
-              wouldAttemptAutoexecAssumingNoCorrection: autoExecEnabled &&
-                !!categoryAutoExecClient && lastPin === "b" &&
-                !!proposalIntent && intentEligible,
+              wouldAttemptAutoexecAssumingNoCorrection: "NOT_OBSERVED",
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
               stubUrlCounts: chatRequests.reduce((acc, r) => {

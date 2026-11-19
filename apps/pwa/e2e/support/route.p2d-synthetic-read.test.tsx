@@ -132,6 +132,8 @@ const { memoryAdapter } = (await import(pathToFileURL(memoryAdapterPath).href)) 
 type AuthConfig = Parameters<typeof createBetterAuth>[0];
 import { createBetterAuth } from "../../../api/src/auth/better-auth.js";
 import { buildTestApp } from "../../../api/tests/test-app.js";
+import { createInMemoryPendingOperationV2Store } from "../../../api/src/approvals/pending-v2.js";
+import { hasNonEmptyRecallItems } from "./p2d-recall-observation.mjs";
 import {
   ACCOUNT_A1,
   ACCOUNT_A2,
@@ -303,6 +305,34 @@ afterEach(() => {
 });
 
 describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK → stub provider → real finance tool → real API", () => {
+  it("observes recall items in plugin output and rejects empty items", () => {
+    expect(hasNonEmptyRecallItems({
+      output: { items: [{ field: "category", value: "Transporte" }] },
+      content: [{ type: "text", text: '{"items":[{"field":"category","value":"Transporte"}]}' }],
+    })).toBe(true);
+    expect(hasNonEmptyRecallItems({
+      output: { items: [] },
+      content: [{ type: "text", text: '{"items":[]}' }],
+    })).toBe(false);
+  });
+
+  it("generates UUID Better-Auth user IDs for the category mint harness", async () => {
+    const auth = createBetterAuth({
+      database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
+      disableSignUp: false,
+      transaction: false,
+      secret: SECRET,
+      baseURL: "http://localhost:3001",
+      trustedOrigins: ["http://localhost:3000"],
+      advanced: { database: { generateId: "uuid" } },
+    });
+    const signup = await auth.api.signUpEmail({
+      body: { email: "ted-uuid-harness@example.test", password: "test-password-123", name: "Ted UUID Harness" },
+      headers: new Headers({ origin: "http://localhost:3000" }),
+    });
+    expect(signup.user.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
   it("chat → history reload → isolation → provider-fault replay → component remount → journal", async () => {
     const root = approvedTmpRoot("ted-pwa-p2dread");
 
@@ -792,6 +822,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       const root = approvedTmpRoot("ted-pwa-p2d-journey-c-real");
       const identity = "p2d-journey-c-real";
       const categoryAutoExecToken = "p2d-synthetic-category-autoexec-mint-token-only";
+      const pendingMintToken = "p2d-synthetic-pending-mint-token-only-32+";
       const categoryTransportId = "22222222-2222-4222-8222-222222222224";
       const createOnly = process.env.P2D_CATEGORY_CREATE_ONLY === "1";
       interface SqliteDb {
@@ -814,6 +845,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
       vi.stubEnv("NODE_ENV", "test");
       vi.stubEnv("ALLOW_LOCAL_ORIGIN", "1");
       vi.stubEnv("PENDING_V2_CATEGORY_AUTOCREATE_ENABLED", "1");
+      vi.stubEnv("PENDING_V2_SUPERSEDE_ENABLED", "1");
       const auth = createBetterAuth({
         database: memoryAdapter({ user: [], session: [], account: [], verification: [] }) as AuthConfig["database"],
         disableSignUp: false,
@@ -821,6 +853,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         secret: SECRET,
         baseURL: "http://localhost:3001",
         trustedOrigins: ["http://localhost:3000"],
+        advanced: { database: { generateId: "uuid" } },
       });
       const built = buildTestApp(
         {
@@ -836,7 +869,17 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         auth,
         workspaceAccess,
         false,
-        { categoryAutoExecMintServiceToken: categoryAutoExecToken },
+        "synthetic-delegation-signing-secret-value-32",
+        { categoryAutoExecMintServiceToken: categoryAutoExecToken,
+          pendingMintServiceToken: pendingMintToken,
+          pendingV2Store: createInMemoryPendingOperationV2Store(),
+          pool: { async query(sql: string, values?: unknown[]) {
+            if (sql.includes("FROM households")) return { rows: [{ id: HOUSEHOLD_A }], rowCount: 1 };
+            if (sql.includes("FROM invites")) return { rows: [], rowCount: 0 };
+            if (sql.includes("FROM device_tokens")) return { rows: [{ device_id: values?.[0] }], rowCount: 1 };
+            return { rows: [], rowCount: 0 };
+          } },
+        },
       );
       let serve: ServeProc | null = null;
       let categoryDb: SqliteDb | null = null;
@@ -856,7 +899,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const sessionCookie = firstCookieSegment(signup.headers.get("set-cookie"));
         const session = await auth.api.getSession({ headers: new Headers({ cookie: sessionCookie }) });
         const actorId = String(session?.user.id ?? "");
-        expect(actorId).not.toBe("");
+        expect(actorId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
         memberships.set(`${actorId}:${HOUSEHOLD_A}`, "owner");
         await built.app.listen({ port: 0, host: "127.0.0.1" });
         const address = built.app.server.address() as { port: number };
@@ -881,6 +924,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           TED_OPENCODE_P3_WRITES_ENABLED: "1",
           TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED: "1",
           TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN: categoryAutoExecToken,
+          TED_PENDING_MINT_TOKEN: pendingMintToken,
         });
         expect(serve.ready["mode"]).toBe("live-real");
         expect(serve.ready["credentialSource"]).toBe("allowlist");
@@ -935,7 +979,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           const memory = memoryState();
           const turn = {
             step, httpStatus: response.status, status: body.status ?? null, intentionId,
-            output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 200),
+            output: String(body.output ?? "").replace(/R\$\s*[\d.,]+/g, "R$ [redacted]").slice(0, 400),
             proposal: body.proposal
               ? {
                   tool: body.proposal.tool ?? null,
@@ -955,6 +999,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             lastPin: stats["lastPin"] ?? null,
             wouldAttemptAutoexecAssumingNoCorrection: stats["wouldAttemptAutoexecAssumingNoCorrection"] ?? null,
             promptCalls: stats["promptCalls"] ?? null, transportCalls: stats["transportCalls"] ?? null,
+            categoryRecallCalls: stats["categoryRecallCalls"] ?? null,
+            categoryRecallReturnedValue: stats["categoryRecallReturnedValue"] ?? null,
             categoryCounts: categories, memoryCount: memory.count,
             memoryRows: memory.rows.map((row) => ({ target: row.target, field: row.field, value: row.value })),
             autoexec: body.autoexec ?? null,
@@ -1021,6 +1067,18 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           "Gastei R$ 50,00 no mercado ontem no Nubank. Use uma categoria existente se fizer sentido.",
           initialMemoryCount,
         );
+        const turn1Proposal = evidence[0]["proposal"] as {
+          tool?: string | null;
+          normalizedArgs?: Record<string, unknown> | null;
+        } | null;
+        expect(turn1Proposal?.tool).toBe("transactions.expense.create");
+        expect(turn1Proposal?.normalizedArgs?.categoryId).toBe(CATEGORY_FOOD_A.id);
+        const pendingProposal = await post(pathFor("pending-operations", "propose"), {
+          tool: turn1Proposal!.tool,
+          intentionId: "p2d-journey-c-real-01",
+          normalizedArgs: turn1Proposal!.normalizedArgs,
+        });
+        expect(pendingProposal.status).toBe(200);
         expect(turn1.categories.count).toBe(initialCategories.count);
         expect(turn1.categories.palestrasCount).toBe(0);
         const existingExpenseCategoryIds = new Set([
@@ -1029,10 +1087,9 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           CATEGORY_SALARY_A.id,
           categoryTransportId,
         ]);
-        const turn1Proposal = evidence[0]["proposal"] as { tool?: string; categoryId?: string } | null;
         const turn1Classification = turn1Proposal
           ? turn1Proposal.tool === "transactions.expense.create" &&
-            existingExpenseCategoryIds.has(String(turn1Proposal.categoryId)) ? "PASS" : "FAIL"
+            existingExpenseCategoryIds.has(String(turn1Proposal.normalizedArgs?.categoryId)) ? "PASS" : "FAIL"
           : "INCONCLUSIVE";
 
         const turn2 = await sendTurn(
@@ -1051,7 +1108,7 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
         const turn3 = await sendTurn(
           "correct-category-preference",
           "p2d-journey-c-real-03",
-          "Corrija a categoria da proposta anterior para Transporte. Para despesas de mercado, prefiro sempre Transporte.",
+          "Corrija a categoria da despesa de mercado para Transporte. Para despesas de mercado, prefiro sempre Transporte.",
           turn2.memory.count,
         );
         expect(turn3.memory.count).toBeGreaterThan(turn2.memory.count);
@@ -1078,7 +1135,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
           beforeNewSession,
         );
         expect(turn4.memory.count).toBe(beforeNewSession);
-        expect(evidence[3].output).toMatch(/transporte/i);
+        expect(evidence[3].categoryRecallCalls).toBeGreaterThan(0);
+        expect(evidence[3].categoryRecallReturnedValue).toBe(true);
 
         const stats = await serve.cmd("stats");
         report.steps = [
@@ -1107,7 +1165,8 @@ describe("P2D synthetic read: PWA proxy/client → loopback gateway → real SDK
             {
               step: evidence[3]["step"],
               result: turn4.memory.count === beforeNewSession &&
-                /transporte/i.test(String(evidence[3]["output"])) ? "PASS" : "FAIL",
+                Number(evidence[3].categoryRecallCalls) > 0 &&
+                evidence[3].categoryRecallReturnedValue === true ? "PASS" : "FAIL",
               evidence: evidence[3],
             },
           ];

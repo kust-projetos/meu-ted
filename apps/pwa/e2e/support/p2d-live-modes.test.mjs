@@ -1115,6 +1115,9 @@ describe("p2d live modes: Playwright env + launcher selection", () => {
     ]) {
       assert.ok(src.includes(required), `probe must contain ${required}`);
     }
+    assert.ok(src.includes('process.env.TED_OPENCODE_PRODUCT_PROMPT_ENABLED === "1"'));
+    assert.ok(src.includes('process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === "1"'));
+    assert.ok(src.includes('{ p3Writes, productPrompt, categoryMemory }'));
     // Live-real ONLY: this child translates the preserved alias into the
     // native key after isolation; presence is observed, never hardcoded. The
     // prep path and the product bootstrap keep the alias untouched.
@@ -1132,16 +1135,17 @@ describe("p2d live modes: Playwright env + launcher selection", () => {
       src.includes("credentialPresent = Boolean(cfg.providers?.[PROVIDER]?.settings?.apiKey)"),
       "offline presence must be observed from the composed provider config",
     );
-    // The retry instrumentation must be gated to LIVE_MODE: the default
-    // synthetic setup/plugin is never wrapped.
+    // The retry instrumentation must be gated to LIVE_MODE; the recall
+    // wrapper remains available in synthetic mode.
     const pluginAt = src.indexOf("const pluginDef = defineTedFinancePlugin");
-    const wrapperAt = src.indexOf("const origSetup = pluginDef.setup.bind(pluginDef)");
+    const origSetupAt = src.indexOf("const origSetup = pluginDef.setup.bind(pluginDef)");
+    const wrapperAt = src.indexOf("const instrumentedSetup = pluginDef.setup.bind(pluginDef)");
     const wireAt = src.indexOf("await wirePlugin(oc, pluginDef)");
-    assert.ok(pluginAt !== -1 && wrapperAt !== -1 && wireAt !== -1, "probe must wire the plugin");
-    assert.ok(pluginAt < wrapperAt && wrapperAt < wireAt, "retry wrapper sits between plugin and wiring");
+    assert.ok(pluginAt !== -1 && origSetupAt !== -1 && wrapperAt !== -1 && wireAt !== -1, "probe must wire the plugin");
+    assert.ok(pluginAt < origSetupAt && origSetupAt < wrapperAt && wrapperAt < wireAt, "recall and retry wrappers must precede plugin wiring");
     assert.ok(
-      src.slice(pluginAt, wrapperAt).includes("if (LIVE_MODE) {"),
-      "retry wrapper must be gated to LIVE_MODE (synthetic plugin untouched)",
+      src.slice(wrapperAt, wireAt).includes("if (LIVE_MODE) {"),
+      "retry wrapper must be gated to LIVE_MODE",
     );
     // Effective-catalog capture is live-real ONLY: the synthetic plugin gets
     // no extra option at all (no wrapper, no instrumentation).

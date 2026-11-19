@@ -221,6 +221,71 @@ describe('p2d live-real fetch guard: V1 completion reads', () => {
     assert.equal(JSON.stringify(guard.stats).includes(body), false);
   });
 
+  it('allows category autoexec mint only with the exact service-token contract', async () => {
+    const url = `${API}/auth/agent/category-autoexec-token`;
+    const body = JSON.stringify({
+      workspaceId: '00000000-0000-4000-8000-000000000001',
+      actorId: '00000000-0000-4000-8000-000000000002',
+      deviceId: '00000000-0000-4000-8000-000000000003',
+      intentionId: '00000000-0000-4000-8000-000000000004',
+    });
+    const requestHeaders = {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-agent-category-autoexec-service-token': 'category-service-secret',
+    };
+    const request = { method: 'POST', headers: requestHeaders, body };
+    assert.deepEqual(classifyLiveRealRequest(url, request, options), { action: 'allow-api', reason: 'api' });
+    const missingTokenHeaders = { ...requestHeaders };
+    delete missingTokenHeaders['x-agent-category-autoexec-service-token'];
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      ...request, headers: missingTokenHeaders,
+    }, options), { action: 'deny', reason: 'api_body' });
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      ...request, body: JSON.stringify({ ...JSON.parse(body), extra: 'private-id' }),
+    }, options), { action: 'deny', reason: 'api_body' });
+
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async () => ({ status: 200 }), apiOrigin: API, expectedModelID: 'test-model',
+    });
+    await guard.fetch(url, request);
+    for (const value of ['category-service-secret', body, '00000000-0000-4000-8000-000000000001']) {
+      assert.equal(JSON.stringify(guard.stats).includes(value), false);
+    }
+    await assert.rejects(() => guard.fetch(url, {
+      ...request, headers: missingTokenHeaders,
+    }), (error) => {
+      for (const value of [
+        'category-service-secret', body,
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000004',
+      ]) assert.equal(error.message.includes(value), false);
+      return true;
+    });
+  });
+
+  it('allows an empty body only for Pending V2 authorize', () => {
+    const url = `${API}/pending-operations/v2/00000000-0000-4000-8000-000000000001/authorize`;
+    const authHeaders = {
+      authorization: 'Bearer test-token',
+      'x-workspace-id': 'workspace',
+      'x-actor-id': 'actor',
+      'x-device-id': 'device',
+      'idempotency-key': 'idempotency',
+      'content-type': 'application/json',
+      accept: 'application/json',
+    };
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      method: 'POST', headers: authHeaders, body: '{}',
+    }, options), { action: 'allow-api', reason: 'api' });
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      method: 'POST', headers: authHeaders, body: '{"unexpected":true}',
+    }, options), { action: 'deny', reason: 'api_body' });
+    assert.deepEqual(classifyLiveRealRequest(`${API}/pending-operations/v2/00000000-0000-4000-8000-000000000001/execute`, {
+      method: 'POST', headers: authHeaders, body: '{}',
+    }, options), { action: 'deny', reason: 'api_body' });
+  });
+
   it('allows pending-operation active and propose with bounded auth headers and opaque observations', async () => {
     const auth = {
       authorization: 'Bearer test-token',
