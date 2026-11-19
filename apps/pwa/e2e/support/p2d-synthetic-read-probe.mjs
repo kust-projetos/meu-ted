@@ -519,6 +519,10 @@ try {
   const { HttpFinanceTransport } = await mod("src/transport.mjs");
   const { resolveGatewayIdentity } = await mod("src/gateway.mjs");
   const { createConversationStore } = await mod("src/conversations.mjs");
+  const { parseConversationCookie } = await mod("src/conversations.mjs");
+  const { proposalIntentRegistry } = await mod("src/proposal-intents.mjs");
+  const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
+  const { isAutoEligibleCategoryIntent } = await mod("src/category-autoexec.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
   const { createPendingClient } = await mod("src/pending-client.mjs");
   const { bindSession, revokeSession, getBinding, isSameHost, rotateSessionBinding } =
@@ -940,10 +944,13 @@ try {
   // that wrapper is covered by the gateway-auth tests with a stub prompt
   // host; here the prompt host is real and the wrapper choice is explicit).
   const sessionQueues = new Map();
+  let statsSessionID = null;
+  let lastPin = "none";
   const withAuthenticatedSession = async (sessionID, host, fn) => {
     if (typeof sessionID !== "string" || sessionID.length === 0) throw new Error("sessionID is required");
     if (!host || typeof host !== "object") throw new Error("host context is required");
     if (typeof fn !== "function") throw new Error("fn is required");
+    statsSessionID = sessionID;
     const execute = async () => {
       await oc.session.get({ sessionID });
       let current = null;
@@ -1094,8 +1101,11 @@ try {
     });
   }
   gateway = createGatewayServer({
-    resolveIdentity: ({ cookie, deviceToken, workspaceId }) =>
-      resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId }),
+    resolveIdentity: ({ cookie, deviceToken, workspaceId }) => {
+      // Keep only the parsed pin classification; never retain or emit the cookie.
+      try { lastPin = parseConversationCookie(cookie).pin; } catch { lastPin = "invalid"; }
+      return resolveGatewayIdentity({ apiBaseUrl, cookie, deviceToken, workspaceId });
+    },
     store,
     promptHost,
     pendingClient,
@@ -1160,8 +1170,26 @@ try {
         if (!line) continue;
         try {
           if (line === "stats") {
+            const proposalIntent = proposalIntentRegistry.peek(statsSessionID);
+            // Use only a non-consuming inspection API; never call take().
+            const correctionCandidatePresent = typeof correctionActionRegistry.peek === "function"
+              ? !!correctionActionRegistry.peek(statsSessionID)
+              : "NOT_OBSERVED";
+            const intentEligible = isAutoEligibleCategoryIntent(proposalIntent);
+            const proposalIntentFound = !!proposalIntent;
+            const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
+              categoryAutoExecEnabled: autoExecEnabled,
+              categoryAutoExecClientPresent: !!categoryAutoExecClient,
+              proposalIntentFound,
+              intentEligible,
+              correctionCandidatePresent,
+              correctionCandidateKnown,
+              lastPin,
+              wouldAttemptAutoexecAssumingNoCorrection: autoExecEnabled &&
+                !!categoryAutoExecClient && lastPin === "b" &&
+                proposalIntentFound && intentEligible,
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
               stubUrlCounts: chatRequests.reduce((acc, r) => {
