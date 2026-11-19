@@ -1115,6 +1115,9 @@ describe("p2d live modes: Playwright env + launcher selection", () => {
     ]) {
       assert.ok(src.includes(required), `probe must contain ${required}`);
     }
+    assert.ok(src.includes('process.env.TED_OPENCODE_PRODUCT_PROMPT_ENABLED === "1"'));
+    assert.ok(src.includes('process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === "1"'));
+    assert.ok(src.includes('{ p3Writes, productPrompt, categoryMemory }'));
     // Live-real ONLY: this child translates the preserved alias into the
     // native key after isolation; presence is observed, never hardcoded. The
     // prep path and the product bootstrap keep the alias untouched.

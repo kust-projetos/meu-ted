@@ -732,10 +732,14 @@ try {
   // - live-real: the product live config exactly (credential stays in env).
   const fs = await import("node:fs");
   const p3Writes = process.env.TED_OPENCODE_P3_WRITES_ENABLED === "1";
+  const productPrompt = process.env.TED_OPENCODE_PRODUCT_PROMPT_ENABLED === "1";
+  const categoryMemory = process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === "1";
   if (MODE === "live-real") {
-    writeTedConfig(iso.dirs.config, "live", { p3Writes });
+    writeTedConfig(iso.dirs.config, "live", { p3Writes, productPrompt, categoryMemory });
   } else {
-    const base = MODE === "offline" ? tedConfig("live", { p3Writes }) : tedConfig(undefined, { p3Writes });
+    const base = MODE === "offline"
+      ? tedConfig("live", { p3Writes, productPrompt, categoryMemory })
+      : tedConfig(undefined, { p3Writes, productPrompt, categoryMemory });
     const cfg = MODE === "offline"
       ? buildOfflineProviderConfig(base, {
           model: MODEL,
