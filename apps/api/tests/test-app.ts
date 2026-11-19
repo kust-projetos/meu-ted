@@ -145,6 +145,11 @@ export const buildTestApp = (
   ...optional: unknown[]
 ): TestApp => {
   const { state, writes } = createInMemoryStores(seed);
+  const testOptions = optional.find(
+    (value): value is TestAppOptions =>
+      typeof value === "object" && value !== null &&
+      ("pendingMintServiceToken" in value || "categoryAutoExecMintServiceToken" in value || "pendingV2Store" in value || "agentAuthServiceToken" in value || "pool" in value),
+  );
   const clock = optional.find(
     (value): value is () => Date => {
       if (typeof value !== "function") return false;
@@ -203,7 +208,7 @@ export const buildTestApp = (
       typeof (value as { propose?: unknown }).propose === "function" &&
       typeof (value as { listActive?: unknown }).listActive === "function" &&
       typeof (value as { findByIdempotencyKey?: unknown }).findByIdempotencyKey === "function",
-  );
+  ) ?? testOptions?.pendingV2Store;
   const auditLogsSeed = (seed as { auditLogs?: Parameters<typeof createInMemoryAuditLogStore>[0] }).auditLogs;
   const auditStore =
     auditLogsSeed !== undefined
@@ -270,11 +275,6 @@ export const buildTestApp = (
   ) ?? true;
   const delegationSecret = optional.find(
     (value): value is string => typeof value === "string" && value.length > 0,
-  );
-  const testOptions = optional.find(
-    (value): value is TestAppOptions =>
-      typeof value === "object" && value !== null &&
-      ("pendingMintServiceToken" in value || "categoryAutoExecMintServiceToken" in value || "agentAuthServiceToken" in value || "pool" in value),
   );
   const approvalPolicy = optional.find(
     (value): value is import("../src/approvals/policy.js").ApprovalPolicy =>
