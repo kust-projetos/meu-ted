@@ -54,6 +54,12 @@ export const LIVE_REAL_FETCH_GUARD = "live-real-allowlist";
 export const LIVE_REAL_API_ROUTES = Object.freeze([
   "POST /auth/agent-token",
   "POST /auth/agent/pending-token",
+  "GET /pending-operations/v2/active",
+  "POST /pending-operations/v2/propose",
+  "POST /pending-operations/undo",
+  "GET /pending-operations/v2/<uuid>",
+  "GET /pending-operations/v2/<uuid>/outcome",
+  "POST /pending-operations/v2/<uuid>/{supersede,confirm,authorize,execute,retry,cancel}",
   "GET /auth/devices/me",
   "GET /accounts",
   "GET /cards/accounts",
@@ -77,6 +83,13 @@ export const LIVE_REAL_API_ROUTES = Object.freeze([
 ]);
 
 const BUDGET_TRENDS_ROUTE_RE = /^GET \/budgets\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/trends$/;
+const PENDING_V2_ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const PENDING_V2_ID_ROUTE_RE = new RegExp(`^(?:GET \\/pending-operations\\/v2\\/${PENDING_V2_ID}(?:\\/outcome)?|POST \\/pending-operations\\/v2\\/${PENDING_V2_ID}\\/(?:supersede|confirm|authorize|execute|retry|cancel))$`);
+const PENDING_V2_HEADERS = Object.freeze([
+  "authorization", "x-workspace-id", "x-actor-id", "x-device-id",
+  "idempotency-key", "content-type", "accept",
+]);
+const PENDING_V2_POST_ROUTE_RE = /^POST \/pending-operations\/(?:v2\/(?:propose|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/(?:supersede|confirm|authorize|execute|retry|cancel))?)|undo)$/;
 const READ_ANY_QUERY = new Set([
   "GET /transactions",
   "GET /insights/spending",
@@ -119,6 +132,10 @@ const API_ROUTE_HEADERS = new Map([
 function allowedApiHeaders(route) {
   const exact = API_ROUTE_HEADERS.get(route);
   if (exact) return exact;
+  if (route === "GET /pending-operations/v2/active") return PENDING_V2_HEADERS;
+  if (PENDING_V2_ID_ROUTE_RE.test(route) || route === "POST /pending-operations/v2/propose" || route === "POST /pending-operations/undo") {
+    return PENDING_V2_HEADERS;
+  }
   if (BUDGET_TRENDS_ROUTE_RE.test(route)) return READ_HEADERS;
   return undefined;
 }
@@ -324,6 +341,38 @@ function classifyApi(input, init, parsed, method) {
     };
   }
   const body = requestBody(input, init);
+  const isPendingV2Route = route === "GET /pending-operations/v2/active" ||
+    route === "POST /pending-operations/v2/propose" ||
+    route === "POST /pending-operations/undo" ||
+    PENDING_V2_ID_ROUTE_RE.test(route);
+  if (isPendingV2Route) {
+    const authorization =
+      headerValue(init && init.headers, "authorization") ??
+      (isRequestLike(input) ? headerValue(input.headers, "authorization") : null);
+    if (typeof authorization !== "string" || !/^Bearer\s+\S+$/i.test(authorization)) {
+      return { action: "deny", reason: "api_header" };
+    }
+    if (PENDING_V2_POST_ROUTE_RE.test(route)) {
+      const contentType =
+        headerValue(init && init.headers, "content-type") ??
+        (isRequestLike(input) ? headerValue(input.headers, "content-type") : null);
+      const text = bodyText(body);
+      let parsed;
+      try {
+        parsed = typeof text === "string" ? JSON.parse(text) : null;
+      } catch {
+        parsed = null;
+      }
+      if (
+        !/^application\/json\b/i.test(String(contentType ?? "").trim()) ||
+        !parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+        Object.keys(parsed).length === 0
+      ) return { action: "deny", reason: "api_body" };
+    } else if (body !== null && body !== undefined) {
+      return { action: "deny", reason: "api_body" };
+    }
+    return { action: "allow-api", reason: "api" };
+  }
   if (route === "POST /auth/agent/pending-token") {
     const contentType =
       headerValue(init && init.headers, "content-type") ??

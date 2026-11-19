@@ -660,7 +660,7 @@ describe("p2d live modes: live-real loopback API allowlist (no network)", () => 
   const API_ORIGIN = "http://127.0.0.1:4110";
   const at = (input, init) => classifyLiveRealRequest(input, init, { apiOrigin: API_ORIGIN });
 
-  it("accepts exactly the four contract pairs (method/path/query/headers/body)", () => {
+  it("accepts only the explicitly allowlisted contract pairs (method/path/query/headers/body)", () => {
     assert.deepEqual(
       at(`${API_ORIGIN}/auth/agent-token`, {
         method: "POST",
