@@ -176,4 +176,48 @@ describe('p2d live-real fetch guard: V1 completion reads', () => {
       'deny',
     );
   });
+
+  it('allows only structurally valid pending-token mint requests without exposing values', async () => {
+    const url = `${API}/auth/agent/pending-token`;
+    const body = JSON.stringify({
+      workspaceId: '00000000-0000-4000-8000-000000000001',
+      actorId: '00000000-0000-4000-8000-000000000002',
+      deviceId: '00000000-0000-4000-8000-000000000003',
+      requestId: '00000000-0000-4000-8000-000000000004',
+    });
+    const requestHeaders = {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-agent-pending-service-token': 'test-token',
+    };
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      method: 'POST', headers: requestHeaders, body,
+    }, options), { action: 'allow-api', reason: 'api' });
+
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async () => ({ status: 200 }),
+      apiOrigin: API,
+      expectedModelID: 'test-model',
+    });
+    await guard.fetch(url, { method: 'POST', headers: requestHeaders, body });
+    assert.equal(JSON.stringify(guard.stats).includes('test-token'), false);
+    assert.equal(JSON.stringify(guard.stats).includes(body), false);
+
+    for (const request of [
+      { headers: { ...requestHeaders, 'x-agent-pending-service-token': undefined }, body },
+      { headers: requestHeaders, body: JSON.stringify({ ...JSON.parse(body), extra: 'test-token' }) },
+    ]) {
+      const headers = { ...request.headers };
+      if (headers['x-agent-pending-service-token'] === undefined) delete headers['x-agent-pending-service-token'];
+      const init = { method: 'POST', headers, body: request.body };
+      assert.deepEqual(classifyLiveRealRequest(url, init, options), { action: 'deny', reason: 'api_body' });
+      await assert.rejects(() => guard.fetch(url, init), (error) => {
+        assert.equal(error.message.includes('test-token'), false);
+        assert.equal(error.message.includes(request.body), false);
+        return true;
+      });
+    }
+    assert.equal(JSON.stringify(guard.stats).includes('test-token'), false);
+    assert.equal(JSON.stringify(guard.stats).includes(body), false);
+  });
 });

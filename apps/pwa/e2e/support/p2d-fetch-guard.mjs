@@ -53,6 +53,7 @@ export const LIVE_REAL_FETCH_GUARD = "live-real-allowlist";
 // reachable — no write, only the explicitly listed read routes.
 export const LIVE_REAL_API_ROUTES = Object.freeze([
   "POST /auth/agent-token",
+  "POST /auth/agent/pending-token",
   "GET /auth/devices/me",
   "GET /accounts",
   "GET /cards/accounts",
@@ -93,6 +94,7 @@ const READ_HEADERS = Object.freeze(["x-device-token", "x-workspace-id", "accept"
 
 const API_ROUTE_HEADERS = new Map([
   ["POST /auth/agent-token", Object.freeze(["cookie", "x-workspace-id", "x-device-token", "content-type", "accept"])],
+  ["POST /auth/agent/pending-token", Object.freeze(["content-type", "accept", "x-agent-pending-service-token"])],
   ["GET /auth/devices/me", Object.freeze(["x-device-token", "accept"])],
   ["GET /accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
   ["GET /cards/accounts", Object.freeze(["x-device-token", "x-workspace-id", "accept"])],
@@ -322,6 +324,29 @@ function classifyApi(input, init, parsed, method) {
     };
   }
   const body = requestBody(input, init);
+  if (route === "POST /auth/agent/pending-token") {
+    const contentType =
+      headerValue(init && init.headers, "content-type") ??
+      (isRequestLike(input) ? headerValue(input.headers, "content-type") : null);
+    const serviceToken =
+      headerValue(init && init.headers, "x-agent-pending-service-token") ??
+      (isRequestLike(input) ? headerValue(input.headers, "x-agent-pending-service-token") : null);
+    const text = bodyText(body);
+    let parsed;
+    try {
+      parsed = typeof text === "string" ? JSON.parse(text) : null;
+    } catch {
+      parsed = null;
+    }
+    const keys = ["workspaceId", "actorId", "deviceId", "requestId"];
+    if (
+      !/^application\/json\b/i.test(String(contentType ?? "").trim()) ||
+      typeof serviceToken !== "string" || serviceToken.length === 0 ||
+      !parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+      Object.keys(parsed).length !== keys.length ||
+      !keys.every((key) => Object.hasOwn(parsed, key) && typeof parsed[key] === "string" && parsed[key].length > 0)
+    ) return { action: "deny", reason: "api_body" };
+  } else
   if (route === "POST /auth/agent-token") {
     if (typeof body !== "string" || body.trim() !== "{}") return { action: "deny", reason: "api_body" };
     const contentType =
