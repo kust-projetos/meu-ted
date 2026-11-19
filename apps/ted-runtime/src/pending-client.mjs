@@ -47,15 +47,28 @@ export function createPendingClient({ apiBaseUrl, allowedOrigins=[], pendingMint
     else { headers.authorization=`Bearer ${token}`; headers['x-workspace-id']=identity.workspaceId; headers['x-actor-id']=identity.actorId; headers['x-device-id']=identity.deviceId; }
     if(key) headers['Idempotency-Key']=key;
     const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),timeoutMs), joined=signal?AbortSignal.any([ctrl.signal,signal]):ctrl.signal;
-    try { const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined}); if(r.status>=300&&r.status<400) throw new PendingClientError(); const data=await r.json().catch(()=>null); if(!r.ok) { const code=r.status>=500?`pending.upstream_5xx_${upstreamOperation(path)}`:[400,401,403,404,409,429].includes(r.status)?`pending.upstream_${r.status}_${upstreamOperation(path)}`:'pending.upstream_error'; throw new PendingClientError(code,method!=='GET'&&r.status<500); } if(!data||typeof data!=='object') throw new PendingClientError(); return data; }
-    catch(e){ if(e instanceof PendingClientError) throw e; throw new PendingClientError(signal?.aborted?'pending.cancelled':'pending.upstream_error'); } finally{clearTimeout(timer);}
+    try {
+      const r=await fetchImpl(origin+path,{method,headers,...(method==='GET'?{}:{body:JSON.stringify(body??{})}),redirect:'manual',signal:joined});
+      if(r.status>=300&&r.status<400) throw new PendingClientError(`pending.upstream_redirect_${upstreamOperation(path)}`);
+      if(!r.ok) {
+        const code=r.status>=500?`pending.upstream_5xx_${upstreamOperation(path)}`:`pending.upstream_${r.status}_${upstreamOperation(path)}`;
+        throw new PendingClientError(code,method!=='GET'&&r.status<500);
+      }
+      const data=await r.json().catch(()=>null);
+      if(!data||typeof data!=='object'||Array.isArray(data)) throw new PendingClientError(`pending.upstream_invalid_body_${upstreamOperation(path)}`);
+      return data;
+    } catch(e) {
+      if(e instanceof PendingClientError) throw e;
+      const code=signal?.aborted?'pending.cancelled':ctrl.signal.aborted?`pending.upstream_timeout_${upstreamOperation(path)}`:`pending.upstream_network_${upstreamOperation(path)}`;
+      throw new PendingClientError(code);
+    } finally{clearTimeout(timer);}
   }
   const scoped=x=>({workspaceId:x.workspaceId,actorId:x.actorId,deviceId:x.deviceId});
   const auth=x=>({token:x.token,identity:scoped(x),signal:x.signal});
   return {
     mintToken: async x=>{ if(typeof pendingMintToken!=='string'||pendingMintToken.length<32) throw new PendingClientError('pending.unavailable'); const d=await request('/auth/agent/pending-token',{body:{workspaceId:x.workspaceId,actorId:x.actorId,deviceId:x.deviceId,requestId:x.requestId},serviceToken:pendingMintToken,signal:x.signal}); if(typeof d.token!=='string'||!d.token||typeof d.expiresAt!=='string'||!Number.isFinite(Date.parse(d.expiresAt))) throw new PendingClientError(); return d.token; },
     propose: async x=>{const d=await request('/pending-operations/v2/propose',{...auth(x),key:x.idempotencyKey,body:{tool:x.tool,normalizedArgs:x.normalizedArgs}}); if(typeof d.id!=='string'||typeof d.existing!=='boolean') throw new PendingClientError(); return d;},
-    get: async x=>{const d=await request(`/pending-operations/v2/${encodeURIComponent(x.id)}`,{...auth(x),method:'GET'}); if(!d||d.id!==x.id||typeof d.tool!=='string'||!d.tool||typeof d.status!=='string'||!d.status||!d.normalizedArgs||typeof d.normalizedArgs!=='object'||Array.isArray(d.normalizedArgs)||Object.keys(d).some(k=>!['id','tool','status','normalizedArgs','proposalHash','expectedContext','createdAt','updatedAt','expiresAt'].includes(k))||typeof d.proposalHash!=='string'||! /^[0-9a-f]{64}$/.test(d.proposalHash)) throw new PendingClientError(); return {id:d.id,tool:d.tool,status:d.status,normalizedArgs:d.normalizedArgs,proposalHash:d.proposalHash};},
+    get: async x=>{const d=await request(`/pending-operations/v2/${encodeURIComponent(x.id)}`,{...auth(x),method:'GET'}); if(!d||d.id!==x.id||typeof d.tool!=='string'||!d.tool||typeof d.status!=='string'||!d.status||!d.normalizedArgs||typeof d.normalizedArgs!=='object'||Array.isArray(d.normalizedArgs)||Object.hasOwn(d,'attestation')||typeof d.proposalHash!=='string'||! /^[0-9a-f]{64}$/.test(d.proposalHash)) throw new PendingClientError(); return {id:d.id,tool:d.tool,status:d.status,normalizedArgs:d.normalizedArgs,proposalHash:d.proposalHash};},
     supersede: async x=>{if(typeof x.id!=='string'||!x.id||typeof x.tool!=='string'||!x.tool||!x.normalizedArgs||typeof x.normalizedArgs!=='object'||Array.isArray(x.normalizedArgs)||typeof x.expectedProposalHash!=='string'||! /^[0-9a-f]{64}$/.test(x.expectedProposalHash)||typeof x.idempotencyKey!=='string'||!x.idempotencyKey) throw new PendingClientError('pending.invalid_args',false); const d=await request(`/pending-operations/v2/${encodeURIComponent(x.id)}/supersede`,{...auth(x),key:x.idempotencyKey,body:{tool:x.tool,normalizedArgs:x.normalizedArgs,expectedProposalHash:x.expectedProposalHash}}); if(!d||typeof d.id!=='string'||!d.id||typeof d.existing!=='boolean'||d.supersedes!==x.id||Object.keys(d).some(k=>!['id','existing','supersedes'].includes(k))) throw new PendingClientError(); return {id:d.id,existing:d.existing,supersedes:d.supersedes};},
     active: async x=>{const d=await request('/pending-operations/v2/active',{...auth(x),method:'GET'}); if(!Array.isArray(d.items)||!Number.isInteger(d.total)||d.total<0) throw new PendingClientError(); return d;},
     confirm: async x=>{const d=await request(`/pending-operations/v2/${encodeURIComponent(x.id)}/confirm`,{...auth(x),body:{intentionId:x.intentionId}}); if(d.id!==x.id||d.status!=='confirmed'||typeof d.attestation!=='string'||d.attestation.length<32) throw new PendingClientError(); return {id:d.id,status:d.status,attestation:d.attestation};},

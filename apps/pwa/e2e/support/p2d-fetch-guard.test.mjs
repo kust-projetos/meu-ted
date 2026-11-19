@@ -176,4 +176,98 @@ describe('p2d live-real fetch guard: V1 completion reads', () => {
       'deny',
     );
   });
+
+  it('allows only structurally valid pending-token mint requests without exposing values', async () => {
+    const url = `${API}/auth/agent/pending-token`;
+    const body = JSON.stringify({
+      workspaceId: '00000000-0000-4000-8000-000000000001',
+      actorId: '00000000-0000-4000-8000-000000000002',
+      deviceId: '00000000-0000-4000-8000-000000000003',
+      requestId: '00000000-0000-4000-8000-000000000004',
+    });
+    const requestHeaders = {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-agent-pending-service-token': 'test-token',
+    };
+    assert.deepEqual(classifyLiveRealRequest(url, {
+      method: 'POST', headers: requestHeaders, body,
+    }, options), { action: 'allow-api', reason: 'api' });
+
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async () => ({ status: 200 }),
+      apiOrigin: API,
+      expectedModelID: 'test-model',
+    });
+    await guard.fetch(url, { method: 'POST', headers: requestHeaders, body });
+    assert.equal(JSON.stringify(guard.stats).includes('test-token'), false);
+    assert.equal(JSON.stringify(guard.stats).includes(body), false);
+
+    for (const request of [
+      { headers: { ...requestHeaders, 'x-agent-pending-service-token': undefined }, body },
+      { headers: requestHeaders, body: JSON.stringify({ ...JSON.parse(body), extra: 'test-token' }) },
+    ]) {
+      const headers = { ...request.headers };
+      if (headers['x-agent-pending-service-token'] === undefined) delete headers['x-agent-pending-service-token'];
+      const init = { method: 'POST', headers, body: request.body };
+      assert.deepEqual(classifyLiveRealRequest(url, init, options), { action: 'deny', reason: 'api_body' });
+      await assert.rejects(() => guard.fetch(url, init), (error) => {
+        assert.equal(error.message.includes('test-token'), false);
+        assert.equal(error.message.includes(request.body), false);
+        return true;
+      });
+    }
+    assert.equal(JSON.stringify(guard.stats).includes('test-token'), false);
+    assert.equal(JSON.stringify(guard.stats).includes(body), false);
+  });
+
+  it('allows pending-operation active and propose with bounded auth headers and opaque observations', async () => {
+    const auth = {
+      authorization: 'Bearer test-token',
+      'x-workspace-id': '00000000-0000-4000-8000-000000000001',
+      'x-actor-id': '00000000-0000-4000-8000-000000000002',
+      'x-device-id': '00000000-0000-4000-8000-000000000003',
+      'idempotency-key': '00000000-0000-4000-8000-000000000004',
+      accept: 'application/json',
+    };
+    const active = `${API}/pending-operations/v2/active`;
+    assert.deepEqual(classifyLiveRealRequest(active, { method: 'GET', headers: auth }, options), {
+      action: 'allow-api', reason: 'api',
+    });
+
+    const propose = `${API}/pending-operations/v2/propose`;
+    const body = JSON.stringify({ amount: 12345, memo: 'synthetic financial value' });
+    const headers = { ...auth, 'content-type': 'application/json' };
+    assert.deepEqual(classifyLiveRealRequest(propose, { method: 'POST', headers, body }, options), {
+      action: 'allow-api', reason: 'api',
+    });
+    const guard = createLiveRealFetchGuard({
+      fetchImpl: async () => ({ status: 200 }),
+      apiOrigin: API,
+      expectedModelID: 'test-model',
+    });
+    await guard.fetch(propose, { method: 'POST', headers, body });
+    const missingAuthorization = { ...headers };
+    delete missingAuthorization.authorization;
+    assert.deepEqual(classifyLiveRealRequest(propose, {
+      method: 'POST', headers: missingAuthorization, body,
+    }, options), { action: 'deny', reason: 'api_header' });
+    for (const invalidBody of ['not-json', '[]', '{}']) {
+      assert.deepEqual(classifyLiveRealRequest(propose, {
+        method: 'POST', headers, body: invalidBody,
+      }, options), { action: 'deny', reason: 'api_body' });
+    }
+    for (const value of ['test-token', body, '12345', '00000000-0000-4000-8000-000000000001']) {
+      assert.equal(JSON.stringify(guard.stats).includes(value), false);
+    }
+    await assert.rejects(() => guard.fetch(propose, {
+      method: 'POST', headers: missingAuthorization, body,
+    }), (error) => {
+      for (const value of ['test-token', body, '12345']) assert.equal(error.message.includes(value), false);
+      return true;
+    });
+    for (const value of ['test-token', body, '12345']) {
+      assert.equal(JSON.stringify(guard.stats).includes(value), false);
+    }
+  });
 });

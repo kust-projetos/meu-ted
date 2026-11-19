@@ -13,7 +13,7 @@ import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 const identity = { workspaceId: 'w', actorId: 'a', deviceId: 'd', token: 'token' };
 
-test('pending client reads a strictly shaped proposal and supersedes with idempotency header', async () => {
+test('pending client projects real proposal response extras and supersedes with idempotency header', async () => {
   const calls = [];
   const client = createPendingClient({
     apiBaseUrl: 'http://127.0.0.1:3001',
@@ -21,7 +21,7 @@ test('pending client reads a strictly shaped proposal and supersedes with idempo
       calls.push({ url, init });
       const body = url.endsWith('/supersede')
         ? { id: 'new-id', existing: false, supersedes: 'old-id' }
-        : { id: 'old-id', tool: 'transactions.expense.create', status: 'proposed', normalizedArgs: { amountCents: 100 }, proposalHash: 'a'.repeat(64) };
+        : { id: 'old-id', tool: 'transactions.expense.create', status: 'proposed', normalizedArgs: { amountCents: 100 }, proposalHash: 'a'.repeat(64), version: 2, bindings: {}, workspaceId: 'w', idempotencyKey: 'private-key', executionAttemptCount: 0, supersedesId: null };
       return { ok: true, status: 200, json: async () => body };
     },
   });
@@ -48,6 +48,32 @@ test('pending client rejects malformed operation shapes without exposing respons
   });
   await assert.rejects(client.get({ ...identity, id: 'old-id' }), (error) =>
     error instanceof PendingClientError && !error.message.includes('do-not-leak'));
+});
+
+test('pending client rejects an attestation in a get response', async () => {
+  const client = createPendingClient({
+    apiBaseUrl: 'http://127.0.0.1:3001',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({
+      id: 'old-id', tool: 'transactions.expense.create', status: 'proposed',
+      normalizedArgs: {}, proposalHash: 'a'.repeat(64), attestation: 'sensitive',
+    }) }),
+  });
+  await assert.rejects(client.get({ ...identity, id: 'old-id' }), PendingClientError);
+});
+
+test('pending client rejects proposal responses missing required fields or with invalid hash', async () => {
+  const valid = { id: 'old-id', tool: 'transactions.expense.create', status: 'proposed', normalizedArgs: {}, proposalHash: 'a'.repeat(64) };
+  for (const malformed of [
+    { ...valid, id: undefined },
+    { ...valid, tool: undefined },
+    { ...valid, proposalHash: 'invalid' },
+  ]) {
+    const client = createPendingClient({
+      apiBaseUrl: 'http://127.0.0.1:3001',
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => malformed }),
+    });
+    await assert.rejects(client.get({ ...identity, id: 'old-id' }), PendingClientError);
+  }
 });
 
 test('conversation active operation metadata persists and can be cleared', () => {

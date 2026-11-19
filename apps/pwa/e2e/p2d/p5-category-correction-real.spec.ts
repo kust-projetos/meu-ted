@@ -199,6 +199,20 @@ test("live-real: correct expense amount before confirmation without creating a c
     try {
       const reportPath = await networkReport.write(testInfo.outputPath("p5-network-report.json"));
       await testInfo.attach("p5-network-report", { path: reportPath, contentType: "application/json" });
+      let apiJournal: { requests: Array<{ method?: string; pathname: string }> } | { error: "journal_unavailable" };
+      try {
+        const value = await ctlGet<Journal>("/p2d/journal");
+        apiJournal = { requests: (value.requests ?? []).map((request) => ({
+          method: request.method,
+          pathname: new URL(String(request.url ?? ""), CTL).pathname,
+        })) };
+      } catch {
+        apiJournal = { error: "journal_unavailable" };
+      }
+      await testInfo.attach("p5-api-journal", {
+        body: Buffer.from(JSON.stringify(apiJournal, null, 2)),
+        contentType: "application/json",
+      });
     } finally {
       networkReport.stop();
     }
