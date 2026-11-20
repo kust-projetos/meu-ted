@@ -93,5 +93,5 @@ produção `79d8b09` permanece inalterado.
 
 - PRs **#455–#459** integrados; **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM real** (cenário único do P5 e jornada C). Isso é validação de harness/runtime em ambiente controlado, **não** validação em produção.
 - Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` (autorizado em 2026-11-19; compose interpola com default `1`). Rollback: `0` no host/`.env` + redeploy.
-- **Smoke/homologação em produção: pendente** — não há evidência registrada de validação em produção; nenhum resultado é inventado aqui.
+- **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
 - A0 descontinuado em 2026-11-17; `apps/ted-runtime` é o único runtime. #245 é manutenção futura, não pré-requisito da V2.1.

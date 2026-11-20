@@ -11,8 +11,7 @@ P5. Este runbook não autoriza novas alterações de capacidade.
 Reconciliação V2.1 (2026-11-19, fatos operacionais): PRs **#455–#459** integrados;
 **P5 PASS** e **Jornada C PASS 4/4 em ambiente sintético com LLM real**. Isso
 valida o harness/runtime em ambiente controlado — **não** é validação em produção.
-**Smoke/homologação em produção: pendente** (não há evidência registrada; não
-inventar resultado). A0 (`apps/agent`) descontinuado em 2026-11-17;
+**Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho). A0 (`apps/agent`) descontinuado em 2026-11-17;
 `apps/ted-runtime` é o único runtime conversacional. #245 é manutenção futura,
 não pré-requisito da V2.1.
 
@@ -32,8 +31,8 @@ não pré-requisito da V2.1.
 - Rollback: backup `docker-compose.yml.bak-pre-category-flip` restaura a
   configuração anterior (flag `0`); também é possível usar
   `ted-runtime:rollback-pre-9dc5d1c`. A Jornada C passou (**4/4**) em ambiente
-  sintético com LLM real após o flip; a homologação/smoke em produção segue
-  **pendente**.
+  sintético com LLM real após o flip; o smoke autenticado em produção passou em
+  2026-11-20 (Test Family).
 - O gateway de produção não tem o fetch guard live-real do harness; as
   correções do PR #456 são apenas do harness/runtime de teste e não rodam em
   produção.
@@ -55,8 +54,8 @@ Sequência para publicar/alterar (sempre com autorização do operador):
    imagem e a tag de rollback `ted-runtime:rollback-pre-9dc5d1c`.
 3. Redeploy do gateway com o compose versionado; verifique health, boot limpo
    (sem as falhas de `writeTedConfig`) e a flag efetiva dentro do container.
-4. Registre evidência real. Hoje a homologação em produção está **pendente**:
-   P5 PASS e Jornada C PASS 4/4 existem apenas em ambiente sintético com LLM real.
+4. Registre evidência real. Smoke autenticado em produção PASS em 2026-11-20
+   (Test Family); memória de categoria segue validada só em ambiente sintético.
 
 **Rollback (voltar para `0`):** defina
 `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no host/`.env` e redeploy. O runtime
@@ -150,5 +149,4 @@ as flags ainda exigem autorização e provisionamento pelo operador.
 ## Pendências operacionais
 
 - Histórico: a Jornada C foi homologada em ambiente sintético com LLM real
-  (**PASS 4/4**), assim como P5 (**PASS**, PRs #455–#459). **Pendente:** smoke /
-  homologação em produção — não há evidência de validação em produção registrada.
+  (**PASS 4/4**), assim como P5 (**PASS**, PRs #455–#459). **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
