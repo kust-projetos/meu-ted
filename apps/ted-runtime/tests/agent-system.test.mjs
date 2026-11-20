@@ -48,4 +48,26 @@ describe('TED product system prompt', () => {
     const file = writeTedConfig(dir, 'test', { productPrompt: false });
     assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(tedConfig('test'), null, 2) + '\n');
   });
+
+  it('rewrites a previously generated config whose only difference is the system prompt', () => {
+    const dir = path.join(approvedTmpRoot('ted-agent-system-prompt-upgrade'), 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'opencode.json');
+    const old = tedConfig('test', { productPrompt: true });
+    old.agents.ted.system = 'prompt de uma versão anterior';
+    fs.writeFileSync(file, JSON.stringify(old, null, 2) + '\n');
+    writeTedConfig(dir, 'test', { productPrompt: true });
+    assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify(tedConfig('test', { productPrompt: true }), null, 2) + '\n');
+  });
+
+  it('still refuses a config edited outside the system prompt', () => {
+    const dir = path.join(approvedTmpRoot('ted-agent-system-user-edit'), 'config');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'opencode.json');
+    const edited = tedConfig('test', { productPrompt: true });
+    edited.agents.ted.system = 'outro prompt';
+    edited.userKey = true;
+    fs.writeFileSync(file, JSON.stringify(edited, null, 2) + '\n');
+    assert.throws(() => writeTedConfig(dir, 'test', { productPrompt: true }), /refusing to overwrite/);
+  });
 });
