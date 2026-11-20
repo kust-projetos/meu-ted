@@ -24,7 +24,7 @@ describe('TED product system prompt', () => {
       /13º salário/i, /cashback/i, /estorno/i,
       /NUNCA pergunte ao usuário/i, /decida você/i,
       /proponha a criação com propose_category_create/i,
-      /recall_category_preference/i, /termo principal normalizado/i,
+      /recall_category_preference/i, /descrição completa do lançamento/i,
       /pergunte quando houver ambiguidade material/i,
       /duas contas homônimas/i, /ano indeterminável/i,
       /nunca confirma nem executa/i, /preservando os demais/i,
