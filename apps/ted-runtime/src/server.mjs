@@ -783,10 +783,14 @@ export function createGatewayServer({
             if (correctionCandidate.changed.categoryId && categoryMemoryStore) {
               try {
                 const categoryName = getCatalog(runtimeSessionId)?.find((category) => category.id === correctionCandidate.changed.categoryId)?.name;
-                if (typeof categoryName === 'string' && categoryName.trim()) {
-                  categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:categoryName });
+                if (!(typeof categoryName === 'string' && categoryName.trim())) {
+                  console.warn('category memory skipped: category not in session catalog');
                 }
-              } catch { /* optional memory */ }
+                if (typeof categoryName === 'string' && categoryName.trim()) {
+                  const saved = categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:categoryName });
+                  console.warn('category memory remember:', saved ? 'saved' : 'not_saved');
+                }
+              } catch (memoryError) { console.warn('category memory error:', memoryError?.code || memoryError?.name || 'unknown'); }
             }
           }
         } catch (e) {

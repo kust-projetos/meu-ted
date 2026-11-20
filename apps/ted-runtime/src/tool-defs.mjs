@@ -1337,6 +1337,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       workspaceId: host.household, actorId: host.actorId,
       target: args.target || host.conversationId, field: args.field || 'category',
     });
+    console.warn('category memory recall:', item ? 'hit' : 'miss');
     return { items: item ? [item] : [] };
   };
   const run = async (name, args, host, opts = {}) => {
