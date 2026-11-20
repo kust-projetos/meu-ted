@@ -119,6 +119,7 @@ test('gateway autoexec only executes eligible intents on enabled B pin and prese
   const executed = await turn({ enabled: true, client: executedClient });
   assert.deepEqual(executed.payload.autoexec, { status: 'executed' });
   assert.equal('proposal' in executed.payload, false);
+  assert.match(executed.payload.output, /^Categoria ".+" criada\.$/);
   assert.equal(executed.intention.status, 'completed');
   assert.doesNotMatch(JSON.stringify({ payload: executed.payload, diagnostics: executed.diagnostics }), /pending-id|category-id|mutation-id|operationId|attestation|synthetic-test-secret|apropriation/i);
 

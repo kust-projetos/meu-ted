@@ -875,15 +875,23 @@ export function createGatewayServer({
       proposalObserved = proposalObserved || !!proposalIntent;
       let deliveredProposal = proposalIntent;
       let autoexec;
+      let executedOutput = null;
       if (autoexecResult?.status === 'executed') {
           autoexec = { status: 'executed' };
           deliveredProposal = null;
+          // The model text was written before execution ("proposta pendente");
+          // state the real outcome instead of leaving a contradiction.
+          executedOutput = `Categoria "${proposalForAutoexec.normalizedArgs.name}" criada.`;
        } else if (autoexecResult?.reason === 'uncertain') {
          autoexec = { status: 'uncertain' };
        } else if (autoexecResult) {
          autoexec = { status: 'left_pending', reason: autoexecResult.reason };
        }
-      return { ...started, proposalObserved,
+      if (autoexecResult && autoexecResult.status !== 'executed') {
+        // Reason code only (closed enum); no ids, args or credentials.
+        console.warn('category autoexec left pending:', autoexecResult.reason || 'unknown');
+      }
+      return { ...started, ...(executedOutput ? { output: executedOutput } : {}), proposalObserved,
         ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
         ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
     }).catch((e) => ({ __error: e }));
