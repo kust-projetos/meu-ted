@@ -56,6 +56,7 @@ describe("TedChatLauncher Component (page navigation)", () => {
 
     const launcher = screen.getByRole("button", { name: /abrir assistente ted/i });
     expect(launcher).toBeInTheDocument();
+    expect(screen.getByTestId("ted-launcher-label")).toHaveTextContent("TED");
     expect(launcher).not.toHaveAttribute("aria-haspopup");
     expect(launcher).not.toHaveAttribute("aria-expanded");
 

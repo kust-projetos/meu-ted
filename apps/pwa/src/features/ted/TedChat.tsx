@@ -668,6 +668,76 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
     setupSettled &&
     (setupAccountsEmpty || setupCategoriesEmpty);
 
+  const [originContext] = useState<{ label: string; prompts: string[] }>(() => {
+    let rawOrigin = "";
+    try {
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        rawOrigin = params.get("from") ?? window.sessionStorage.getItem("meu-ted:ted-origin") ?? "";
+      }
+    } catch {
+      rawOrigin = "";
+    }
+    if (rawOrigin.includes("comprovante") || rawOrigin.includes("capture")) {
+      return {
+        label: "Atalhos · Comprovante",
+        prompts: [
+          "Registrar despesa de comprovante PIX: valor e descrição",
+          "Lançar compra no cartão a partir de um comprovante",
+          "Conferir se este comprovante já foi registrado hoje",
+        ],
+      };
+    }
+    if (rawOrigin.includes("cartoes")) {
+      return {
+        label: "Atalhos · Cartões",
+        prompts: [
+          "Qual o resumo e vencimento das minhas faturas abertas?",
+          "Simule o pagamento da minha fatura atual do cartão",
+          "Quanto ainda tenho de limite disponível nos cartões?",
+        ],
+      };
+    }
+    if (rawOrigin.includes("registros") || rawOrigin.includes("extrato")) {
+      return {
+        label: "Atalhos · Extrato",
+        prompts: [
+          "Quais foram meus maiores gastos recentes no extrato?",
+          "Quanto gastei em alimentação neste mês?",
+          "Registrar uma nova despesa na conta corrente",
+        ],
+      };
+    }
+    if (rawOrigin.includes("relatorios")) {
+      return {
+        label: "Atalhos · Relatórios",
+        prompts: [
+          "Quanto entrou, saiu e sobrou neste mês?",
+          "Em quais categorias mais gastei nos últimos 30 dias?",
+          "Como está minha taxa de poupança real e patrimônio?",
+        ],
+      };
+    }
+    if (rawOrigin.includes("compromissos") || rawOrigin.includes("a-pagar")) {
+      return {
+        label: "Atalhos · Compromissos",
+        prompts: [
+          "Quais contas a pagar estão vencidas ou vencem esta semana?",
+          "Cadastrar uma nova conta a pagar para este mês",
+          "Marcar uma conta a pagar pendente como paga",
+        ],
+      };
+    }
+    return {
+      label: "Atalhos · Início",
+      prompts: [
+        "Quanto gastei em alimentação este mês?",
+        "Quais contas vencem nos próximos dias?",
+        "Mostre o resumo do meu saldo e resultado do mês",
+      ],
+    };
+  });
+
   // Isolamento por workspace: limpar histórico imediatamente ao trocar de workspace.
   useEffect(() => {
     const newId = activeWorkspace?.id ?? null;
@@ -1276,12 +1346,8 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                   </div>
                 </div>
               )}
-              <div className="mt-5 grid w-full max-w-[300px] gap-2">
-                {[
-                  "Quanto gastei em alimentação este mês?",
-                  "Mostre minhas metas e progresso",
-                  "Simule pagamento da fatura de R$ 777,40",
-                ].map((q) => (
+              <div className="mt-5 grid w-full max-w-[300px] gap-2" data-testid="ted-origin-shortcuts">
+                {originContext.prompts.map((q) => (
                   <button
                     key={q}
                     type="button"
@@ -1292,7 +1358,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                   </button>
                 ))}
               </div>
-              <div className="mt-4 text-[11px] font-medium tracking-wide text-text-muted">Sugestões • toque para preencher</div>
+              <div className="mt-4 text-[11px] font-medium tracking-wide text-text-muted">
+                {originContext.label} • toque para preencher
+              </div>
             </div>
           )}
 
@@ -1421,10 +1489,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                   void handleSend(e as unknown as React.FormEvent);
                 }
               }}
-              placeholder="Pergunte sobre gastos, metas ou pagamentos…"
+              placeholder="Pergunte ou lance um gasto…"
               aria-label="Mensagem para o assistente"
               rows={1}
-              className="max-h-28 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 text-text-primary placeholder:text-text-muted focus:outline-none"
+              className="max-h-28 min-h-[28px] flex-1 resize-none bg-transparent py-1 text-[15px] leading-6 text-text-primary placeholder:text-text-muted focus:outline-none"
             />
             {loading && canCancelTurn ? (
               <button

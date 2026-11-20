@@ -133,7 +133,17 @@ function formatBRL(cents: number): string {
 
 function formatDayMonth(dateStr: string): { day: string; mon: string } {
   const d = new Date(dateStr + "T12:00:00");
-  return { day: String(d.getDate()), mon: d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "") };
+  return { day: String(d.getDate()).padStart(2, "0"), mon: d.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "") };
+}
+
+function formatDatePtBr(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 function daysUntil(dateStr: string): number {
@@ -141,6 +151,25 @@ function daysUntil(dateStr: string): number {
   const today = new Date(todayStr + "T12:00:00");
   const d = new Date(dateStr + "T12:00:00");
   return Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function formatPayableDueCopy(
+  dateStr: string,
+  status: "paid" | "overdue" | "pending",
+): string {
+  const formatted = formatDatePtBr(dateStr);
+  if (status === "paid") return `Paga em ${formatted}`;
+  const diff = daysUntil(dateStr);
+  if (status === "overdue" || diff < 0) {
+    const lateDays = Math.abs(diff);
+    if (lateDays === 1) return `Venceu em ${formatted} (há 1 dia)`;
+    if (lateDays > 1) return `Venceu em ${formatted} (há ${lateDays} dias)`;
+    return `Venceu em ${formatted}`;
+  }
+  if (diff === 0) return `Vence hoje (${formatted})`;
+  if (diff === 1) return `Vence amanhã (${formatted})`;
+  if (diff <= 7) return `Vence em ${formatted} (em ${diff} dias)`;
+  return `Vence em ${formatted}`;
 }
 
 interface PayableWithStatus extends Payable {
@@ -225,7 +254,7 @@ function DetailSheet({
               </div>
               <div className="flex justify-between rounded-[14px] bg-surface-2 px-4 py-3 border border-border-subtle">
                 <span className="text-[13px] text-text-secondary">Vencimento</span>
-                <span className="text-[13px] font-semibold text-text-primary">{payable.dueDate}</span>
+                <span className="text-[13px] font-semibold text-text-primary">{formatDatePtBr(payable.dueDate)}</span>
               </div>
               <div className="flex justify-between rounded-[14px] bg-surface-2 px-4 py-3 border border-border-subtle">
                 <span className="text-[13px] text-text-secondary">Status</span>
@@ -452,7 +481,7 @@ export default function PayablesPage() {
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[14px] font-bold text-text-primary">{p.description}</div>
                         <div className="text-[11px] font-medium" style={{ color: isOverdue ? "var(--color-danger)" : "var(--color-text-muted)" }}>
-                          {getCategory(p.categoryId)}{p.categoryId && " · "}{isOverdue ? `Venceu ${p.dueDate}` : `Vence ${p.dueDate}`}
+                          {getCategory(p.categoryId)}{p.categoryId && " · "}{formatPayableDueCopy(p.dueDate, p.derivedStatus)}
                         </div>
                       </div>
                       <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{formatBRL(p.amountCents)}</div>

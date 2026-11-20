@@ -61,6 +61,14 @@ export function TedChatLauncher() {
   const onTedPage = pathname === "/ted";
 
   const handleFabOpen = () => {
+    try {
+      if (typeof window !== "undefined") {
+        const search = window.location.search ?? "";
+        window.sessionStorage.setItem("meu-ted:ted-origin", `${pathname ?? "/"}${search}`);
+      }
+    } catch {
+      /* storage indisponível */
+    }
     router.push("/ted");
   };
 
@@ -74,16 +82,25 @@ export function TedChatLauncher() {
       aria-label="Abrir assistente TED"
       tabIndex={hideLauncher ? -1 : undefined}
       data-overlay-restore-fallback
-      className={`group fixed bottom-[88px] right-4 z-40 h-14 w-14 overflow-hidden rounded-full shadow-fab ring-1 ring-white/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-modal focus:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 active:translate-y-0 motion-reduce:transition-none motion-reduce:hover:translate-y-0 lg:bottom-6 lg:right-6 ${hideLauncher ? "pointer-events-none opacity-0" : ""}`}
+      className={`group fixed bottom-[88px] right-4 z-40 flex h-12 items-center gap-1.5 overflow-hidden rounded-full bg-surface-1/95 p-1.5 pr-3.5 shadow-fab ring-1 ring-border-strong backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:shadow-modal focus:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 active:translate-y-0 motion-reduce:transition-none motion-reduce:hover:translate-y-0 lg:bottom-6 lg:right-6 ${hideLauncher ? "pointer-events-none opacity-0" : ""}`}
     >
-      <Image
-        src="/brand/ted-launcher.png"
-        alt=""
-        width={56}
-        height={56}
-        priority
-        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-      />
+      <span className="h-9 w-9 flex-none overflow-hidden rounded-full ring-1 ring-primary/20">
+        <Image
+          src="/brand/ted-launcher.png"
+          alt=""
+          width={36}
+          height={36}
+          priority
+          className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+        />
+      </span>
+      <span
+        aria-hidden="true"
+        data-testid="ted-launcher-label"
+        className="text-[12px] font-extrabold tracking-tight text-text-primary"
+      >
+        TED
+      </span>
     </button>
   );
 }

@@ -195,8 +195,8 @@ export default function HomePage() {
       .map((p) => ({
         key: p.id,
         tone: "danger" as const,
-        label: `${p.description} vencida`,
-        value: dateLabel(p.dueDate),
+        label: `${p.description} vencida · ${dateLabel(p.dueDate)}`,
+        value: formatBRL(p.amountCents),
         date: p.dueDate,
         route: routeCompromissos("a-pagar"),
       })),
@@ -206,7 +206,7 @@ export default function HomePage() {
         key: p.id,
         tone: "warning" as const,
         label: `${p.description} vence ${dateLabel(p.dueDate)}`,
-        value: undefined,
+        value: formatBRL(p.amountCents),
         date: p.dueDate,
         route: routeCompromissos("a-pagar"),
       })),
@@ -242,6 +242,24 @@ export default function HomePage() {
           : 1,
     )
     .slice(0, 4);
+
+  const attentionSummary = (() => {
+    if (attention.length === 0) return "Tudo em dia.";
+    const overdueCount = attention.filter((item) => item.date < todayKey).length;
+    const todayCount = attention.filter((item) => item.date === todayKey).length;
+    const upcomingCount = attention.filter(
+      (item) => item.date > todayKey && item.date < "9999-12-31",
+    ).length;
+    const limitAlerts = attention.filter((item) => item.date === "9999-12-31").length;
+    const parts: string[] = [];
+    if (overdueCount > 0) parts.push(`${overdueCount} em atraso`);
+    if (todayCount > 0) parts.push(`${todayCount} para hoje`);
+    if (upcomingCount > 0) parts.push(`${upcomingCount} nos próximos dias`);
+    if (limitAlerts > 0 && parts.length === 0) {
+      parts.push(`${limitAlerts} ${limitAlerts === 1 ? "alerta de limite" : "alertas de limite"}`);
+    }
+    return parts.join(" · ") || `${attention.length} pendências`;
+  })();
   const pendingPayables = payables
     .filter((p) => p.status === "pending" || p.status === "overdue")
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
@@ -292,7 +310,35 @@ export default function HomePage() {
             ))}
           </nav>
         )}</> },
-    "home-statement": { title: "Fechamento do mês", node: <>        <StatementPanel eyebrow={`Fechamento · ${month} · todas as contas`} className="my-3">
+    "home-statement": { title: "Fechamento do mês", node: <>        <StatementPanel
+          eyebrow={`Fechamento · ${month} · todas as contas`}
+          className="my-3"
+          footer={
+            pendingPayables[0] ? (
+              <button
+                type="button"
+                data-testid="home-next-due"
+                onClick={() => router.push(routeCompromissos("a-pagar"))}
+                className="flex w-full items-center justify-between gap-2 text-left text-xs font-medium text-[var(--statement-text)] focus-visible:outline-none focus-visible:underline"
+              >
+                <span className="min-w-0 truncate">
+                  <span className="text-[var(--statement-muted)]">
+                    {pendingPayables[0].dueDate < todayKey || pendingPayables[0].status === "overdue"
+                      ? "Vencimento em atraso:"
+                      : "Próximo vencimento:"}
+                  </span>{" "}
+                  <strong className="font-semibold">{pendingPayables[0].description}</strong>{" "}
+                  <span className="text-[var(--statement-muted)]">
+                    ({dateLabel(pendingPayables[0].dueDate)})
+                  </span>
+                </span>
+                <span className="text-money tabular shrink-0 font-semibold">
+                  {formatBRL(pendingPayables[0].amountCents)}
+                </span>
+              </button>
+            ) : undefined
+          }
+        >
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
             <div>
               <p className="text-xs text-[var(--statement-muted)]">Receitas</p>
@@ -591,18 +637,16 @@ export default function HomePage() {
       )}
       <main className="mx-auto flex w-full max-w-[640px] flex-1 flex-col overflow-y-auto px-5 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:px-8 lg:pb-0">
         <PullToRefreshIndicator state={pull} />
-        <header className="flex items-center justify-between pb-5 pt-[calc(1rem+env(safe-area-inset-top))]">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-text-primary">
+        <header className="flex items-center justify-between gap-2 pb-5 pt-[calc(1rem+env(safe-area-inset-top))]">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-xl font-bold tracking-tight text-text-primary">
               {greeting}, {firstName}
             </h1>
             <p className="mt-1 text-sm text-text-secondary">
-              {attention.length
-                ? `${attention.length} itens para hoje`
-                : "Tudo em dia."}
+              {attentionSummary}
             </p>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-0.5">
             <button
               type="button"
               aria-label="Explorar"
@@ -644,9 +688,14 @@ export default function HomePage() {
           className="border-b border-[var(--hairline)] pb-5"
         >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-text-muted">
-              Saldo total em contas
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold text-text-muted">
+                Saldo total em contas
+              </p>
+              <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-text-secondary">
+                Disponível agora
+              </span>
+            </div>
             <button
               onClick={toggle}
               aria-pressed={hidden}

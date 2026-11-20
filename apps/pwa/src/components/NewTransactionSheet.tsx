@@ -595,7 +595,7 @@ export default function NewTransactionSheet({
     (isTransfer && (!fromAccountId || !toAccountId || fromAccountId === toAccountId));
 
   return (
-    <div className="flex flex-col gap-5" onChangeCapture={markDirty}>
+    <div className="flex flex-col gap-3.5" onChangeCapture={markDirty}>
       {/* Tabs */}
       <div className="flex gap-1 rounded-xl bg-fill-light p-1">
         {tabs.map((t) => (
@@ -615,9 +615,9 @@ export default function NewTransactionSheet({
         ))}
       </div>
 
-      {/* Valor */}
+      {/* 1. Valor */}
       <fieldset>
-        <label htmlFor="nt-valor" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wide text-text-muted">
+        <label htmlFor="nt-valor" className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-text-muted">
           Valor
         </label>
         <div className="relative">
@@ -631,14 +631,130 @@ export default function NewTransactionSheet({
             value={amountDisplay}
             onChange={handleAmountInput}
             placeholder="0,00"
-            className="w-full rounded-[13px] border border-border bg-surface py-3 pl-11 pr-3.5 font-mono text-[24px] font-semibold text-text-primary outline-none transition-colors focus:border-primary"
+            className="w-full rounded-[13px] border border-border bg-surface py-2.5 pl-11 pr-3.5 font-mono text-[24px] font-semibold text-text-primary outline-none transition-colors focus:border-primary"
           />
         </div>
       </fieldset>
 
-      {/* Data (custom calendar toggle) */}
+      {/* 2. Descrição (logo após valor no mesmo fluxo mental) */}
+      <fieldset>
+        <label htmlFor="nt-descricao" className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-text-muted">
+          Descrição
+        </label>
+        <input
+          id="nt-descricao"
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Ex: Aluguel, mercado..."
+          className="w-full rounded-[13px] border border-border bg-transparent px-3.5 py-2.5 text-[16px] text-text-primary outline-none focus:border-primary"
+        />
+      </fieldset>
+
+      {/* 3. B1: Categoria (collapsible pill → BottomSheet) */}
+      {!isTransfer && (
+        <div>
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+            Categoria
+          </div>
+          <button
+            type="button"
+            aria-label="Selecionar categoria"
+            aria-expanded={categorySheetOpen}
+            onClick={() => {
+              setAddingCategory(false);
+              setCategorySheetOpen(true);
+            }}
+            className="flex w-full items-center justify-between rounded-[13px] border border-border bg-surface px-3.5 py-2.5 text-left transition-colors focus:border-primary"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              {selectedCategory || selectedSubcategory ? (
+                <CategoryBadge name={selectedSubcategory?.name ?? selectedCategory?.name ?? ""} size={16} icon={selectedSubcategory?.icon ?? selectedCategory?.icon} />
+              ) : null}
+              <span className={`truncate text-[15px] ${categoryId ? "font-semibold text-text-primary" : "text-text-muted"}`}>
+                {categoryPillLabel}
+              </span>
+            </span>
+            <ChevronDown size={16} className={`flex-none text-text-muted transition-transform ${categorySheetOpen ? "rotate-180" : ""}`} />
+          </button>
+        </div>
+      )}
+
+      {/* 4. B2: Origem — segmented toggle + collapsible selector */}
+      {!isTransfer && (
+        <div>
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+            Origem
+          </div>
+          <div role="group" aria-label="Origem" className="flex h-9 gap-1 rounded-xl bg-fill-light p-1">
+            {(
+              [
+                { key: "card", label: "Cartão", Icon: CreditCard },
+                { key: "account", label: "Conta", Icon: Wallet },
+              ] as const
+            ).map(({ key, label, Icon }) => {
+              // H-01: income never runs on a card (the API rejects it with
+              // 422); the option is disabled instead of failing on save.
+              const disabled = tab === "income" && key === "card";
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={originKind === key}
+                  disabled={disabled}
+                  title={disabled ? "Receitas usam conta" : undefined}
+                  onClick={() => switchOriginKind(key)}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-[10px] text-[13px] font-bold transition-colors ${
+                    originKind === key
+                      ? "bg-surface text-text-primary shadow-sm"
+                      : "text-text-muted"
+                  } ${disabled ? "opacity-40" : ""}`}
+                >
+                  <Icon size={15} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            aria-label="Selecionar conta ou cartão"
+            aria-expanded={originSheetOpen}
+            onClick={() => {
+              setAddingAccount(false);
+              setAddingCard(false);
+              setOriginSheetOpen(true);
+            }}
+            className="mt-2 flex w-full items-center justify-between rounded-[13px] border border-border bg-surface px-3.5 py-2.5 text-left transition-colors focus:border-primary"
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] bg-fill-light text-text-secondary">
+                {originKind === "card" ? <CreditCard size={16} /> : <Wallet size={16} />}
+              </span>
+              <span className="min-w-0">
+                <span className={`block truncate text-[15px] ${selectedOrigin ? "font-semibold text-text-primary" : "text-text-muted"}`}>
+                  {selectedOrigin?.name ?? "Selecionar"}
+                </span>
+                {selectedOrigin && (
+                  <span className="block truncate text-[11px] font-medium text-text-muted">
+                    {originDetail}
+                  </span>
+                )}
+              </span>
+            </span>
+            <ChevronDown size={16} className={`flex-none text-text-muted transition-transform ${originSheetOpen ? "rotate-180" : ""}`} />
+          </button>
+          {missingOrigin && (
+            <p className="mt-1 text-[12px] font-semibold text-text-muted">
+              Escolha a origem para salvar.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* 5. Data (custom calendar toggle) */}
       <div>
-        <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">
+        <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-text-muted">
           Data
         </div>
         <button
@@ -646,12 +762,12 @@ export default function NewTransactionSheet({
           aria-label={`Selecionar data: ${dateLabel}`}
           aria-expanded={calOpen}
           onClick={() => setCalOpen(!calOpen)}
-          className="flex w-full items-center justify-between rounded-[13px] bg-surface px-3.5 py-3 text-left transition-colors"
+          className="flex w-full items-center justify-between rounded-[13px] bg-surface px-3.5 py-2.5 text-left transition-colors"
           style={{
             border: `1.5px solid ${calOpen ? "var(--color-primary)" : "var(--color-border)"}`,
           }}
         >
-          <span className="text-[16px] text-text-primary">{dateLabel}</span>
+          <span className="text-[15px] text-text-primary">{dateLabel}</span>
           <span className="flex items-center gap-1 text-text-muted">
             <Calendar size={16} />
             <ChevronDown size={14} className={`transition-transform ${calOpen ? "rotate-180" : ""}`} />
@@ -695,7 +811,7 @@ export default function NewTransactionSheet({
                   type="button"
                   disabled={c.day === 0}
                   onClick={() => c.day > 0 && selectCalDay(c.day)}
-                  className="min-h-[29px] rounded-[7px] text-center font-mono text-[12px] font-semibold transition-colors"
+                  className="min-h-[38px] rounded-[7px] text-center font-mono text-[12px] font-semibold transition-colors"
                   style={{
                     background: c.isSelected
                       ? "var(--color-primary)"
@@ -716,120 +832,6 @@ export default function NewTransactionSheet({
           </div>
         )}
       </div>
-
-      {/* Descrição */}
-      <fieldset>
-        <label htmlFor="nt-descricao" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wide text-text-muted">
-          Descrição
-        </label>
-        <input
-          id="nt-descricao"
-          type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Ex: Aluguel, mercado..."
-          className="w-full rounded-[13px] border border-border bg-transparent px-3.5 py-3 text-[16px] text-text-primary outline-none focus:border-primary"
-        />
-      </fieldset>
-
-      {/* B1: Categoria (collapsible pill → BottomSheet) */}
-      {!isTransfer && (
-        <div>
-          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">
-            Categoria
-          </div>
-          <button
-            type="button"
-            aria-label="Selecionar categoria"
-            aria-expanded={categorySheetOpen}
-            onClick={() => {
-              setAddingCategory(false);
-              setCategorySheetOpen(true);
-            }}
-            className="flex w-full items-center justify-between rounded-[13px] border border-border bg-surface px-3.5 py-3 text-left transition-colors focus:border-primary"
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              {selectedCategory || selectedSubcategory ? (
-                <CategoryBadge name={selectedSubcategory?.name ?? selectedCategory?.name ?? ""} size={16} icon={selectedSubcategory?.icon ?? selectedCategory?.icon} />
-              ) : null}
-              <span className={`truncate text-[15px] ${categoryId ? "font-semibold text-text-primary" : "text-text-muted"}`}>
-                {categoryPillLabel}
-              </span>
-            </span>
-            <ChevronDown size={16} className={`flex-none text-text-muted transition-transform ${categorySheetOpen ? "rotate-180" : ""}`} />
-          </button>
-        </div>
-      )}
-
-      {/* B2: Origem — segmented toggle + collapsible selector */}
-      {!isTransfer && (
-        <div>
-          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-text-muted">
-            Origem
-          </div>
-          <div role="group" aria-label="Origem" className="flex h-9 gap-1 rounded-xl bg-fill-light p-1">
-            {(
-              [
-                { key: "card", label: "Cartão", Icon: CreditCard },
-                { key: "account", label: "Conta", Icon: Wallet },
-              ] as const
-            ).map(({ key, label, Icon }) => {
-              // H-01: income never runs on a card (the API rejects it with
-              // 422); the option is disabled instead of failing on save.
-              const disabled = tab === "income" && key === "card";
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  aria-pressed={originKind === key}
-                  disabled={disabled}
-                  title={disabled ? "Receitas usam conta" : undefined}
-                  onClick={() => switchOriginKind(key)}
-                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-[10px] text-[13px] font-bold transition-colors ${
-                    originKind === key
-                      ? "bg-surface text-text-primary shadow-sm"
-                      : "text-text-muted"
-                  } ${disabled ? "opacity-40" : ""}`}
-                >
-                  <Icon size={15} />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            aria-label="Selecionar conta ou cartão"
-            aria-expanded={originSheetOpen}
-            onClick={() => {
-              setAddingAccount(false);
-              setAddingCard(false);
-              setOriginSheetOpen(true);
-            }}
-            className="mt-2 flex w-full items-center justify-between rounded-[13px] border border-border bg-surface px-3.5 py-3 text-left transition-colors focus:border-primary"
-          >
-            <span className="flex min-w-0 items-center gap-2.5">
-              <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] bg-fill-light text-text-secondary">
-                {originKind === "card" ? <CreditCard size={16} /> : <Wallet size={16} />}
-              </span>
-              <span className="min-w-0">
-                <span className={`block truncate text-[15px] ${selectedOrigin ? "font-semibold text-text-primary" : "text-text-muted"}`}>
-                  {selectedOrigin?.name ?? "Selecionar"}
-                </span>
-                <span className="block truncate text-[11px] font-medium text-text-muted">
-                  {originDetail}
-                </span>
-              </span>
-            </span>
-            <ChevronDown size={16} className={`flex-none text-text-muted transition-transform ${originSheetOpen ? "rotate-180" : ""}`} />
-          </button>
-          {missingOrigin && (
-            <p className="mt-1.5 text-[12px] font-semibold text-text-muted">
-              Escolha a origem para salvar.
-            </p>
-          )}
-        </div>
-      )}
 
       {/* B3: Parcelas — only for card origin */}
       {!isTransfer && originKind === "card" && (

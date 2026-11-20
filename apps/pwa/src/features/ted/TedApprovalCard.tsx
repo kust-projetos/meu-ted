@@ -909,7 +909,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             type="button"
             disabled={loading}
             onClick={handleApprove}
-            className="rounded-[10px] bg-primary px-3.5 py-2 font-bold text-white shadow-xs transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-50"
+            className="min-h-11 rounded-[10px] bg-primary px-4 py-2 font-bold text-white shadow-xs transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-50"
           >
             {loading ? "Processando…" : confirmLabel}
           </button>
@@ -917,7 +917,7 @@ export function TedApprovalCard({ operation, workspaceId, onResolved }: TedAppro
             type="button"
             disabled={loading}
             onClick={handleReject}
-            className="rounded-[10px] border border-border-subtle bg-surface-1 px-3.5 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
+            className="min-h-11 rounded-[10px] border border-border-subtle bg-surface-1 px-4 py-2 font-bold text-text-secondary transition-all hover:bg-surface-2 active:scale-95 disabled:opacity-50"
           >
             {presentation.tool === "transactions.transfer.create" ? "Rejeitar" : "Cancelar"}
           </button>

@@ -115,9 +115,11 @@ describe("HomePage editorial composition", () => {
       /Bom dia|Boa tarde|Boa noite/,
     );
     expect(
-      screen.getByText(/Tudo em dia\.|\d+ itens para hoje/),
+      screen.getByText(/Tudo em dia\.|\d+ em atraso|\d+ para hoje|\d+ nos próximos dias/),
     ).toBeInTheDocument();
     expect(screen.getByText("Saldo total em contas")).toBeInTheDocument();
+    expect(screen.getByText("Disponível agora")).toBeInTheDocument();
+    expect(screen.getByTestId("home-next-due")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Ocultar saldos" }));
     expect(
       screen.getByRole("button", { name: "Mostrar saldos" }),

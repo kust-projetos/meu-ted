@@ -130,11 +130,13 @@ describe("PayablesPage", () => {
       expect(container.querySelectorAll("[data-no-swipe]").length).toBeGreaterThanOrEqual(1);
     });
 
-    it("shows grouped sections", () => {
+    it("shows grouped sections and formats due dates in pt-BR instead of raw ISO (mobile audit 11)", () => {
       render(<PayablesPage />);
       expect(screen.getAllByText(/Vencidas/).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Próximas/).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Pagas/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(/Venceu em 20\/06\/2026/)).toBeInTheDocument();
+      expect(screen.queryByText(/2026-06-20/)).not.toBeInTheDocument();
     });
 
     it("no inline Pago/Cancelar buttons exist on cards", () => {

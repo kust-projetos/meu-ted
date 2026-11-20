@@ -123,8 +123,8 @@ export function BottomNav({
     setMenuOpen(false);
     haptic(8);
     if (action === "receipt") {
-      // Share-target/scanner overflow: /capture opens the prefilled sheet.
-      router.push("/capture");
+      // Direciona leitura de comprovante para o assistente TED com contexto.
+      router.push("/ted?from=comprovante");
       return;
     }
     // Reuses the capture (preselected) sheet mode via the AppShell listener.
@@ -151,7 +151,7 @@ export function BottomNav({
 
       {/* FAB — central: opens the quick-action menu */}
       <div
-        className="relative flex flex-none items-start justify-center"
+        className="relative flex flex-none flex-col items-center justify-start"
         style={{ width: 64 }}
       >
         <button
@@ -160,7 +160,7 @@ export function BottomNav({
             haptic(8);
             setMenuOpen((open) => !open);
           }}
-          className="relative -top-2.5 flex h-[52px] w-[52px] items-center justify-center rounded-full text-white shadow-fab transition-transform active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+          className="relative -top-2.5 flex h-[48px] w-[48px] flex-none items-center justify-center rounded-full text-white shadow-fab transition-transform active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
           style={{
             background: "linear-gradient(145deg, var(--primary), var(--primary-dark))",
           }}
@@ -184,6 +184,13 @@ export function BottomNav({
             </svg>
           )}
         </button>
+        <span
+          aria-hidden="true"
+          data-testid="fab-visible-label"
+          className="-mt-1.5 text-center text-[11px] font-bold text-primary"
+        >
+          Lançar
+        </span>
 
         {menuOpen && (
           <>
