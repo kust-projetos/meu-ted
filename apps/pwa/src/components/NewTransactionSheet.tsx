@@ -237,7 +237,6 @@ export default function NewTransactionSheet({
   const [calMonth, setCalMonth] = useState(today.getMonth());
 
   const isTransfer = tab === "transfer";
-  const isExpense = tab === "expense";
   const filteredAccounts = accounts.filter((a) => a.kind !== "credit_card");
   const creditCards = accounts.filter((a) => a.kind === "credit_card");
   const originOptions = originKind === "card" ? creditCards : filteredAccounts;
