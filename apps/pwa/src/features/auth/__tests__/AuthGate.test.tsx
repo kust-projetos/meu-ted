@@ -67,9 +67,9 @@ describe("AuthGate", () => {
     expect(emailInput).toBeInTheDocument();
     const passInput = screen.getByPlaceholderText(/••••••••/);
     expect(passInput).toHaveAttribute("type", "password");
-    fireEvent.click(screen.getByRole("button", { name: "Mostrar senha" }));
+    fireEvent.click(screen.getByRole("button", { name: "Exibir caracteres" }));
     expect(passInput).toHaveAttribute("type", "text");
-    fireEvent.click(screen.getByRole("button", { name: "Ocultar senha" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar caracteres" }));
     expect(passInput).toHaveAttribute("type", "password");
     expect(screen.getByRole("button", { name: /Entrar/i })).toBeInTheDocument();
   });
