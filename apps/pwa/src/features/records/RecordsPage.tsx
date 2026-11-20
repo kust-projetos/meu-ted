@@ -326,7 +326,7 @@ export default function RecordsPage() {
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por descrição ou destinatário"
+              placeholder="Buscar lançamento por descrição ou destinatário"
               className="w-full border-none bg-transparent text-[13px] font-medium text-text-primary placeholder:text-text-muted outline-none"
             />
             {search.trim() !== "" && (

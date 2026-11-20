@@ -267,15 +267,28 @@ test("[NAV-06] quick menu Despesa opens the preselected expense sheet", async ({
 
 test("[NAV-07] quick action Ler Comprovante opens the capture expense sheet", async ({ page }) => {
   const id = tid("nav"); const guard = await setup(page, id);
+  await page.route("**/finance-chat-agent/**/rpc/history*", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0 }),
+    }),
+  );
+  await page.route("**/finance-chat-agent/**/rpc/undo/active*", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0 }),
+    }),
+  );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
   await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
   await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Ler Comprovante", exact: true }).click({ timeout: 5000 });
-  // /capture is a bridge: it opens the prefilled transaction sheet then
-  // replaces the URL back to the canonical home route.
-  await expect(page.getByRole("heading", { name: "Nova despesa" })).toBeVisible({ timeout: 5000 });
-  await expect(page).toHaveURL(/\/$/);
+  // Ler Comprovante routes directly to the TED assistant with receipt context.
+  await expect(page.getByRole("region", { name: /Chat com TED/i })).toBeVisible({ timeout: 5000 });
+  await expect(page).toHaveURL(/\/ted(\?from=comprovante)?$/);
   assertNoUndeclaredFailures(guard);
 });
 

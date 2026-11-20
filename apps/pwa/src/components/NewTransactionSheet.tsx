@@ -246,11 +246,6 @@ export default function NewTransactionSheet({
     (c) => c.kind === tab && !c.parentId,
   );
 
-  // Subcategories of the selected category
-  const subcategories = categoryId
-    ? categories.filter((c) => c.parentId === categoryId)
-    : [];
-
   const selectedCategory = categories.find((c) => c.id === categoryId);
   const selectedSubcategory = categories.find((c) => c.id === subcategoryId);
   const categoryPillLabel = selectedSubcategory
