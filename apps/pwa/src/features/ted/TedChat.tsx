@@ -1489,10 +1489,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
                   void handleSend(e as unknown as React.FormEvent);
                 }
               }}
-              placeholder="Pergunte ou lance um gasto…"
+              placeholder="Pergunte sobre gastos, metas ou pagamentos…"
               aria-label="Mensagem para o assistente"
               rows={1}
-              className="max-h-28 min-h-[28px] flex-1 resize-none bg-transparent py-1 text-[15px] leading-6 text-text-primary placeholder:text-text-muted focus:outline-none"
+              className="max-h-28 min-h-[44px] flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-5 text-text-primary placeholder:text-text-muted focus:outline-none"
             />
             {loading && canCancelTurn ? (
               <button
