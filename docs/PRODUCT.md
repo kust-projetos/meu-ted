@@ -29,8 +29,7 @@ autorização por workspace, a confirmação e a idempotência são preservadas.
 **Estado V2.1 (2026-11-19):** autoexecução de `categories.create` ativa no
 gateway (`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`, autorizado pelo operador),
 restrita a essa operação. PRs **#455–#459** integrados; **P5 PASS** e **Jornada C
-PASS 4/4** em **ambiente sintético com LLM real**. **Validação/smoke em produção:
-pendente** (sem evidência registrada). Ver
+PASS 4/4** em **ambiente sintético com LLM real**. **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho). Ver
 [runbook de paridade de flags](runbooks/ted-runtime-paridade-flags.md).
 
 **HISTÓRICO (até 2026-11-17):** o A0 (`apps/agent`) seguia ativo como rollback e

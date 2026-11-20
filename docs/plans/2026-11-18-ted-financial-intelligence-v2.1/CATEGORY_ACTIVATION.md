@@ -75,7 +75,6 @@ O rollback não requer nem autoriza exclusão de dados.
   fora do repositório; autoexecução restrita a `categories.create`, com dono da
   conversa (pin B).
 - PRs **#455–#459** integrados; **P5 PASS** e **Jornada C PASS 4/4** em
-  **ambiente sintético com LLM real**. **Smoke/homologação em produção:
-  pendente** — sem evidência registrada, nenhum resultado inventado.
+  **ambiente sintético com LLM real**. **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
 - Esta seção substitui, para fins de estado atual, as afirmações históricas de
   flag `0` / P5 FAIL acima.

@@ -10,7 +10,7 @@
 ## Unreleased (2026-11-19 — reconciliação V2.1; somente docs/config, sem deploy)
 
 - Estado efetivo V2.1: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` no gateway (autorizado pelo operador em 2026-11-19); o compose passa a interpolar a variável com default `1`, preservando o valor da VPS — rollback = definir `0` no host/`.env` e redeploy (ver [runbook](docs/runbooks/ted-runtime-paridade-flags.md)). PRs **#455–#459** integrados; autoexecução restrita a `categories.create`.
-- Homologação: **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM real** — isso valida o harness/runtime, não a produção. **Smoke/homologação em produção: pendente**; nenhuma evidência de validação em produção foi registrada, e nenhum resultado é inventado aqui.
+- Homologação: **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM real** — isso valida o harness/runtime, não a produção. **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
 - A0 descontinuado em 2026-11-17; `apps/ted-runtime` é o único runtime conversacional. #245 é manutenção futura, não pré-requisito da V2.1.
 - Esta mudança é apenas documentação e configuração versionada: sem deploy, merge, alteração de flags na VPS ou nova funcionalidade.
 
