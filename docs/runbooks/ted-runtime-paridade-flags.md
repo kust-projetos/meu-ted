@@ -11,7 +11,7 @@ P5. Este runbook não autoriza novas alterações de capacidade.
 Reconciliação V2.1 (2026-11-19, fatos operacionais): PRs **#455–#459** integrados;
 **P5 PASS** e **Jornada C PASS 4/4 em ambiente sintético com LLM real**. Isso
 valida o harness/runtime em ambiente controlado — **não** é validação em produção.
-**Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho). A0 (`apps/agent`) descontinuado em 2026-11-17;
+**Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). **Memória de categoria validada em produção (2026-11-20, Test Family):** correção Lanche→Padaria aprendida e aplicada em conversa nova (gateway `bab19db`, PRs #463–#466). Preferência genérica não é persistida por desenho. A0 (`apps/agent`) descontinuado em 2026-11-17;
 `apps/ted-runtime` é o único runtime conversacional. #245 é manutenção futura,
 não pré-requisito da V2.1.
 
@@ -55,7 +55,7 @@ Sequência para publicar/alterar (sempre com autorização do operador):
 3. Redeploy do gateway com o compose versionado; verifique health, boot limpo
    (sem as falhas de `writeTedConfig`) e a flag efetiva dentro do container.
 4. Registre evidência real. Smoke autenticado em produção PASS em 2026-11-20
-   (Test Family); memória de categoria segue validada só em ambiente sintético.
+   (Test Family); memória de categoria validada em produção em 2026-11-20.
 
 **Rollback (voltar para `0`):** defina
 `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no host/`.env` e redeploy. O runtime
@@ -149,4 +149,6 @@ as flags ainda exigem autorização e provisionamento pelo operador.
 ## Pendências operacionais
 
 - Histórico: a Jornada C foi homologada em ambiente sintético com LLM real
-  (**PASS 4/4**), assim como P5 (**PASS**, PRs #455–#459). **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
+  (**PASS 4/4**), assim como P5 (**PASS**, PRs #455–#459). **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). **Memória de categoria validada em produção (2026-11-20, Test Family):** correção Lanche→Padaria aprendida e aplicada em conversa nova (gateway `bab19db`, PRs #463–#466). Preferência genérica não é persistida por desenho.
+
+- Lição de deploy (2026-11-20): mudar o texto do system prompt altera o `opencode.json` gerado; antes do #466 isso derrubava o boot (loop de reinício, rollback via tag `ted-runtime:rollback-pre-*`). O código-fonte na VPS é uma cópia (sem git): ao atualizar, remova arquivos que saíram do repositório.

@@ -24,7 +24,7 @@ com default `1`), `TED_RISK_BASED_AUTOEXECUTE=on` na API (preexistente) e
 autocreate de categoria/supersede Pending V2 habilitados na API. A autoexecução
 de `categories.create` está ativa apenas para essa operação. PRs **#455–#459**
 integrados; **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM
-real**. **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). Memória de categoria e preferência genérica entre sessões **não** validadas em produção (preferência genérica não é persistida por desenho).
+real**. **Smoke autenticado em produção (2026-11-20, Test Family): PASS** — login, conta, transação, extrato, TED lendo dado real e mutação por proposta com recibo único (`live-mobile-full`, 0 violações de workspace); `categories.create` por autoexec confirmado a partir do 2º turno da conversa (sem card; categoria lida como ativa pelo TED). **Memória de categoria validada em produção (2026-11-20, Test Family):** correção Lanche→Padaria aprendida e aplicada em conversa nova (gateway `bab19db`, PRs #463–#466). Preferência genérica não é persistida por desenho.
 
 **HISTÓRICO (2026-11-18):** `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no
 gateway; sem cliente de autoexecução, `categories.create` autoexec não estava
