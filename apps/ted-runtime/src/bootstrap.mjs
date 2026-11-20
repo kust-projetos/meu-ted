@@ -502,6 +502,22 @@ function isModelOverrideCompatible(currentText, wantedText) {
 }
 
 // No BOM on purpose: BOM-prefixed files are rejected by Config.parseInfo.
+// A release may only have changed the embedded system prompt text. Treat a file
+// that differs from a known generated variant solely in agents.ted.system as
+// our own previous output (any other divergence is still user work).
+function sameExceptSystemPrompt(current, variant) {
+  try {
+    const a = JSON.parse(current);
+    const b = JSON.parse(variant);
+    for (const cfg of [a, b]) {
+      if (cfg?.agents?.ted && typeof cfg.agents.ted.system === 'string') delete cfg.agents.ted.system;
+    }
+    return JSON.stringify(a) === JSON.stringify(b) && JSON.parse(current)?.agents?.ted?.system !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 // Existing generated flag variants are rewritten to the requested config.
 // A legitimate native `model` selector override is preserved untouched;
 // any other divergent file is the user's work and refused. A symlink is
@@ -539,7 +555,7 @@ export function writeTedConfig(configDir, profileOrOpts, { p3Writes = false, pro
             productPrompt: previousProductPrompt,
             categoryMemory: previousCategoryMemory,
           }), null, 2) + '\n';
-          if (current === variant) {
+          if (current === variant || sameExceptSystemPrompt(current, variant)) {
             fs.writeFileSync(file, wanted, { encoding: 'utf8' });
             return file;
           }
