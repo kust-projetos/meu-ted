@@ -1,5 +1,10 @@
 # Homologação operacional — TED Financial Intelligence V2.1
 
+> **HISTÓRICO (2026-11-18):** o corpo deste documento registra as tentativas e
+> o estado da missão de homologação em 18/11, quando P5 era INCONCLUSIVE e a
+> flag era `0`. O estado efetivo atual está em "Estado efetivo V2.1
+> (2026-11-19)" ao final.
+
 ## Objetivo
 
 Homologar, em ambiente controlado, a jornada integrada de interpretação,
@@ -50,7 +55,7 @@ ou reiniciar a sessão, mantendo o mesmo stack.
   `NOT_OBSERVED`.
 - Nenhuma chamada paga sem autorização explícita do operador.
 
-## Registro da tentativa (2026-11-18)
+## Registro da tentativa (HISTÓRICO 2026-11-18)
 
 Homologação instrumentada — tentativa única (2026-11-18): a execução autorizada com `P2D_LIVE_REAL=1 P2D_CATEGORY_CORRECTION_REAL=1` falhou ANTES de iniciar o teste com `Error: Timed out waiting 600000ms from config.webServer`. A spec não chegou a rodar: SEM anexo `p5-network-report`, SEM jornada financeira executada, SEM status/code de rede capturados. Custo/tokens NOT_OBSERVED. `.env.local` restaurado com hash idêntico; portas liberadas. Classificação: falha de infraestrutura do harness (prontidão do webServer), não falha funcional demonstrada; causa do timeout não determinada. Nenhuma nova execução paga foi realizada, conforme o limite do orientador.
 
@@ -58,8 +63,9 @@ Instrumentação de rede integrada e validada gratuitamente (teste 3/3, PR #430,
 
 ## Habilitação em produção
 
-Exige evidência aprovada do cenário único acima e autorização específica do
-operador. Até lá, manter `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`,
+**HISTÓRICO (2026-11-18):** exigia evidência aprovada do cenário único acima e
+autorização específica do operador; até lá, manter
+`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`,
 `TED_RISK_BASED_AUTOEXECUTE=off` e
 `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED` /
 `TED_OPENCODE_CATEGORY_MEMORY_ENABLED` restritas ao sintético. O baseline de
@@ -73,7 +79,7 @@ produção `79d8b09` permanece inalterado.
   “Não foi possível preparar a proposta de despesa”; o `code` do gateway ainda
   não foi capturado.
 
-## Encerramento da missão de homologação (2026-11-18)
+## Encerramento da missão de homologação (HISTÓRICO 2026-11-18)
 
 **Fase 0 (prontidão gratuita): falhou.** O coordenador P2D em modo sintético (`P2D_BROWSER=1`) parou no log `[p2d-stack] root=...`; nenhuma das quatro portas abriu em 240 s: API 4110, coordenador 3200, gateway 3221 e Next 3201 — todas sem resposta. O log do coordenador tinha 87 bytes (apenas `root=...`); o log do Next estava vazio (0 bytes). Portas liberadas ao final (`PORTS_RELEASED=True`).
 
@@ -81,4 +87,11 @@ produção `79d8b09` permanece inalterado.
 
 **Decisão do orientador:** encerrar a missão de homologação com bloqueio de infraestrutura documentado. Sem novas tentativas, sem chamadas pagas, sem declarar infraestrutura corrigida nem P5 aprovado. Instrumentação de `/propose` e `/active` preservada (PR #430, validada 3/3) para futura investigação.
 
-**Estado final:** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**; prontidão das quatro portas não comprovada; baseline de produção `79d8b09` inalterado; nenhuma flag ativada; nenhum deploy. Próxima retomada exige primeiro diagnóstico confiável da inicialização P2D e comprovação de prontidão de API/coordenador/gateway/Next antes de qualquer nova execução com LLM real.
+**Estado final (HISTÓRICO 2026-11-18):** V2.1 implementada e integrada, mas **NÃO homologada integralmente**; P5 **INCONCLUSIVE**; prontidão das quatro portas não comprovada; baseline de produção `79d8b09` inalterado; nenhuma flag ativada; nenhum deploy. Próxima retomada exige primeiro diagnóstico confiável da inicialização P2D e comprovação de prontidão de API/coordenador/gateway/Next antes de qualquer nova execução com LLM real. Não descreve o estado atual.
+
+## Estado efetivo V2.1 (2026-11-19)
+
+- PRs **#455–#459** integrados; **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM real** (cenário único do P5 e jornada C). Isso é validação de harness/runtime em ambiente controlado, **não** validação em produção.
+- Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` (autorizado em 2026-11-19; compose interpola com default `1`). Rollback: `0` no host/`.env` + redeploy.
+- **Smoke/homologação em produção: pendente** — não há evidência registrada de validação em produção; nenhum resultado é inventado aqui.
+- A0 descontinuado em 2026-11-17; `apps/ted-runtime` é o único runtime. #245 é manutenção futura, não pré-requisito da V2.1.

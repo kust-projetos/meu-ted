@@ -1,18 +1,23 @@
 # Ativação controlada de `categories.create`
 
-## Estado observado
+> **HISTÓRICO (2026-11-18):** as seções abaixo registram o estado no baseline
+> `9dc5d1c`, quando a flag era `0` e P5 era INCONCLUSIVE/FAIL. O estado efetivo
+> atual está em "Estado efetivo V2.1 (2026-11-19)" ao final deste documento.
+
+## Estado observado (HISTÓRICO 2026-11-18)
 
 No baseline de produção `9dc5d1c`:
 
-- Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`.
+- **HISTÓRICO (2026-11-18):** Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`.
 - `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` está provisionado fora do
   repositório. Com a flag em `0`, o gateway não cria cliente de autoexecução.
 - API: `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e
   `TED_RISK_BASED_AUTOEXECUTE=on` (valor preexistente). Isso, isoladamente,
   não ativa a execução no gateway.
-- A autoexecução de `categories.create` permanece **inativa**. V2.1 não está
-  homologada integralmente: rodadas P5 posteriores falharam (FAIL), conforme
-  [VALIDATION.md](VALIDATION.md) e [HOMOLOGATION.md](HOMOLOGATION.md).
+- **HISTÓRICO (2026-11-18):** a autoexecução de `categories.create` permanecia
+  **inativa**; V2.1 não estava homologada integralmente e rodadas P5 posteriores
+  falharam (FAIL), conforme [VALIDATION.md](VALIDATION.md) e
+  [HOMOLOGATION.md](HOMOLOGATION.md). Não descreve o estado atual.
 
 ## Pré-requisitos e limites
 
@@ -30,8 +35,8 @@ Antes de qualquer ativação, cumprir
 ## Sequência proposta
 
 1. Obter aprovação da homologação P5, com evidência de `/propose` e `/active`.
-   P5 permanece FAIL; os resultados sintéticos não substituem essa
-   aprovação.
+   **HISTÓRICO (2026-11-18):** P5 permanece FAIL neste registro; os resultados
+   sintéticos não substituem essa aprovação.
 2. Validar deterministicamente a jornada C em ambiente sintético e registrar
    evidência. A resposta do gateway deve registrar `proposalObserved`; os
    diagnósticos do probe podem incluir `intentEligible` e
@@ -52,11 +57,25 @@ Antes de qualquer ativação, cumprir
 
 ## Gate e rollback
 
-**Nenhuma flag de produção foi alterada nesta missão.** Qualquer flip exige
-autorização específica e separada do operador. As issues #440 (homologação P5)
-e #441 (ativação controlada/jornada C) permanecem abertas; não declarar a
-V2.1 homologada.
+**HISTÓRICO (2026-11-18):** nenhuma flag de produção foi alterada naquela
+missão; qualquer flip exigia autorização específica e separada do operador. As
+issues #440 (homologação P5) e #441 (ativação controlada/jornada C) permaneciam
+abertas. Não descreve o estado atual.
 
-Para rollback, restaurar `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` e usar a
-tag de rollback registrada. O rollback não requer nem autoriza exclusão de
-dados.
+Para rollback, definir `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no host/`.env`
+e usar a tag de rollback registrada (o compose versionado tem default `1`).
+O rollback não requer nem autoriza exclusão de dados.
+
+## Estado efetivo V2.1 (2026-11-19)
+
+- Gateway: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` (autorizado pelo operador
+  em 2026-11-19); o compose interpola a variável com default `1`.
+- API: `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e
+  `TED_RISK_BASED_AUTOEXECUTE=on` (preexistente). Token dedicado provisionado
+  fora do repositório; autoexecução restrita a `categories.create`, com dono da
+  conversa (pin B).
+- PRs **#455–#459** integrados; **P5 PASS** e **Jornada C PASS 4/4** em
+  **ambiente sintético com LLM real**. **Smoke/homologação em produção:
+  pendente** — sem evidência registrada, nenhum resultado inventado.
+- Esta seção substitui, para fins de estado atual, as afirmações históricas de
+  flag `0` / P5 FAIL acima.

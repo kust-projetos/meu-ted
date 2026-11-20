@@ -79,12 +79,15 @@ decisão do operador.
 
 PR #435 (`fix(gateway): inject category autoexec mint token into compose`) foi
 mesclado antes do deploy. O token dedicado foi provisionado, mas
-`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` efetivo; portanto, não existe cliente
-de autoexecução no gateway e `categories.create` autoexec não está ativa.
+**HISTÓRICO (2026-11-18):** `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`
+efetivo naquele registro; portanto, não existia cliente de autoexecução no
+gateway e `categories.create` autoexec não estava ativa.
 `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`; `TED_RISK_BASED_AUTOEXECUTE=on` na
 API é valor preexistente. A homologação integral com LLM real (P5) permanece
 **INCONCLUSIVE**. Detalhes em
 `../2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md`.
+
+> **HISTÓRICO (2026-11-19):** a flag foi autorizada para `1` em 19/11; estado atual em `../2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md`.
 
 **Nota operacional:** o gateway teve 14 falhas de boot com
 `writeTedConfig: opencode.json already exists with different content — refusing to overwrite user work`;
