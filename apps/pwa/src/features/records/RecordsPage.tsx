@@ -15,7 +15,7 @@ import { CategoryBadge } from "@/components/ui/CategoryBadge";
 import { useAppState } from "@/lib/state/app-state-context";
 import type { Transaction } from "@/lib/state/types";
 import { usePullToRefresh, PullToRefreshIndicator } from "@/lib/ui/use-pull-to-refresh";
-import { Search, SlidersHorizontal, ChevronRight, ChevronLeft, Plus } from "lucide-react";
+import { Search, SlidersHorizontal, ChevronRight, ChevronLeft, Plus, X } from "lucide-react";
 
 type TypeFilter = "all" | "expense" | "income" | "transfer";
 type PeriodFilter = "all" | "today" | 7 | 30 | "month" | "custom";
@@ -311,22 +311,39 @@ export default function RecordsPage() {
           />
         )}
 
-        {/* Search */}
-        <div className="mx-5 mb-3 sm:mx-8 lg:mx-12">
+        {/* Search with persistent label & direct clear */}
+        <div className="mx-5 mb-2.5 sm:mx-8 lg:mx-12">
+          <label
+            htmlFor="records-search-input"
+            className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-text-muted"
+          >
+            Buscar lançamento
+          </label>
           <div className="flex items-center gap-2.5 rounded-[14px] border border-border-subtle bg-surface-1 px-3.5 py-2.5 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all">
             <Search size={16} className="text-text-muted flex-none" />
             <input
-              type="text"
+              id="records-search-input"
+              type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar lançamento"
+              placeholder="Buscar por descrição ou destinatário"
               className="w-full border-none bg-transparent text-[13px] font-medium text-text-primary placeholder:text-text-muted outline-none"
             />
+            {search.trim() !== "" && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Limpar busca"
+                className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted hover:text-text-primary"
+              >
+                <X size={13} />
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Compact filter trigger */}
-        <div className="mx-5 mb-3 sm:mx-8 lg:mx-12">
+        {/* Compact filter trigger + direct active filter removal pills */}
+        <div className="mx-5 mb-3 flex flex-col gap-2 sm:mx-8 lg:mx-12">
           <button
             data-testid="filter-trigger"
             onClick={() => setFilterOpen(true)}
@@ -364,6 +381,74 @@ export default function RecordsPage() {
               </span>
             )}
           </button>
+
+          {(typeFilter !== "all" ||
+            periodFilter !== "all" ||
+            accountFilter !== null ||
+            categoryFilter !== null) && (
+            <div
+              data-testid="active-filters-bar"
+              className="flex flex-wrap items-center gap-1.5"
+              aria-label="Filtros ativos"
+            >
+              {typeFilter !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setTypeFilter("all")}
+                  aria-label={`Remover filtro ${chips.find((c) => c.key === typeFilter)?.label ?? "de tipo"}`}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-primary/30 bg-primary-tint px-3 py-1 text-[11px] font-bold text-primary transition-colors hover:bg-primary/15"
+                >
+                  <span>{chips.find((c) => c.key === typeFilter)?.label}</span>
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+              {periodFilter !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPeriodFilter("all");
+                    setCustomStartDate("");
+                    setCustomEndDate("");
+                  }}
+                  aria-label="Remover filtro de período"
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-2 px-3 py-1 text-[11px] font-bold text-text-secondary transition-colors hover:bg-surface-3"
+                >
+                  <span>
+                    {periodFilter === "today"
+                      ? "Hoje"
+                      : periodFilter === "month"
+                        ? "Este mês"
+                        : periodFilter === "custom"
+                          ? "Personalizado"
+                          : `${periodFilter}d`}
+                  </span>
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+              {accountFilter && (
+                <button
+                  type="button"
+                  onClick={() => setAccountFilter(null)}
+                  aria-label="Remover filtro de conta"
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-2 px-3 py-1 text-[11px] font-bold text-text-secondary transition-colors hover:bg-surface-3"
+                >
+                  <span>{accounts.find((a) => a.id === accountFilter)?.name}</span>
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+              {categoryFilter && (
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter(null)}
+                  aria-label="Remover filtro de categoria"
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-subtle bg-surface-2 px-3 py-1 text-[11px] font-bold text-text-secondary transition-colors hover:bg-surface-3"
+                >
+                  <span>{categories.find((c) => c.id === categoryFilter)?.name}</span>
+                  <X size={12} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Filter BottomSheet */}
@@ -412,25 +497,25 @@ export default function RecordsPage() {
                 </button>
               ))}
             </div>
-            {/* Custom date inputs */}
+            {/* Custom date inputs (stacked on narrow screens) */}
             {periodFilter === "custom" && (
-              <div className="mt-3 flex gap-2">
-                <div className="flex-1">
+              <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div className="min-w-0">
                   <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-text-muted">Data inicial</label>
                   <input
                     type="date"
                     value={customStartDate}
                     onChange={(e) => setCustomStartDate(e.target.value)}
-                    className="w-full rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[12px] text-text-primary outline-none focus:border-primary"
+                    className="min-h-11 w-full min-w-0 rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[12px] text-text-primary outline-none focus:border-primary"
                   />
                 </div>
-                <div className="flex-1">
+                <div className="min-w-0">
                   <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-text-muted">Data final</label>
                   <input
                     type="date"
                     value={customEndDate}
                     onChange={(e) => setCustomEndDate(e.target.value)}
-                    className="w-full rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[12px] text-text-primary outline-none focus:border-primary"
+                    className="min-h-11 w-full min-w-0 rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[12px] text-text-primary outline-none focus:border-primary"
                   />
                 </div>
               </div>

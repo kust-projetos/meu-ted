@@ -99,8 +99,36 @@ function ReportsAnalyticsBlocks({ accounts, workspaceId }: { accounts: FilterAcc
         fixed.scope === "account" && fixed.subscriptionsCents > 0
           ? `discricionário ${formatBRL(fixed.discretionaryCents)} · +${formatBRL(fixed.subscriptionsCents)} assinaturas (todas as contas)`
           : `discricionário ${formatBRL(fixed.discretionaryCents)}`;
+      const periodNetCents = kpis.incomeCents - kpis.expenseCents;
       return (
         <BlockShell key={id} title={title} testId={`analytics-block-${id}`} {...editProps(id, index)}>
+          <div
+            data-testid="reports-cashflow-summary"
+            className="mb-3 grid grid-cols-3 gap-2 rounded-[14px] border border-border-subtle bg-surface-2 p-3"
+          >
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Entrou</div>
+              <div className="mt-0.5 truncate font-mono tabular-nums text-[14px] font-bold text-primary">
+                {formatBRL(kpis.incomeCents)}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Saiu</div>
+              <div className="mt-0.5 truncate font-mono tabular-nums text-[14px] font-bold text-danger">
+                {formatBRL(kpis.expenseCents)}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Sobrou</div>
+              <div
+                className={`mt-0.5 truncate font-mono tabular-nums text-[14px] font-bold ${
+                  periodNetCents >= 0 ? "text-primary" : "text-danger"
+                }`}
+              >
+                {formatBRL(periodNetCents)}
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2.5" data-testid="reports-kpi-grid">
             <KpiCard
               label="Taxa de poupança real"

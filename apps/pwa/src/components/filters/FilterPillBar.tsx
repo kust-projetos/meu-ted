@@ -104,18 +104,21 @@ export function FilterPillBar({
               {filters.period === option && <span className="h-2 w-2 rounded-full bg-primary" aria-hidden="true" />}
             </button>
           ))}
-          <div className="flex items-center gap-2 px-3 py-2">
-              <label className="flex flex-1 flex-col gap-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">
+          <div
+            data-testid="period-custom-dates"
+            className="mt-1 flex flex-col gap-2.5 border-t border-border-subtle px-3 pt-2.5 pb-2 sm:flex-row sm:items-end"
+          >
+              <label className="flex min-w-0 flex-1 flex-col gap-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">
                 De
                 <input
                   type="date"
                   value={customFrom}
                   onChange={(e) => setCustomFrom(e.target.value)}
                   aria-label="Data inicial personalizada"
-                  className="rounded-[10px] border border-border-subtle bg-surface-2 px-2 py-1.5 text-[12px] font-medium normal-case text-text-primary outline-none focus:border-primary"
+                  className="min-h-11 w-full min-w-0 rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[13px] font-medium normal-case text-text-primary outline-none focus:border-primary"
                 />
               </label>
-              <label className="flex flex-1 flex-col gap-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">
+              <label className="flex min-w-0 flex-1 flex-col gap-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">
                 Até
                 <input
                   type="date"
@@ -123,7 +126,7 @@ export function FilterPillBar({
                   min={customFrom || undefined}
                   onChange={(e) => setCustomTo(e.target.value)}
                   aria-label="Data final personalizada"
-                  className="rounded-[10px] border border-border-subtle bg-surface-2 px-2 py-1.5 text-[12px] font-medium normal-case text-text-primary outline-none focus:border-primary"
+                  className="min-h-11 w-full min-w-0 rounded-[10px] border border-border-subtle bg-surface-2 px-3 py-2 text-[13px] font-medium normal-case text-text-primary outline-none focus:border-primary"
                 />
               </label>
               <button
@@ -133,7 +136,7 @@ export function FilterPillBar({
                   onPeriodChange("custom", { from: customFrom, to: customTo });
                   setDrawer(null);
                 }}
-                className="self-end rounded-[10px] bg-primary px-3.5 py-2 text-[12px] font-bold text-white disabled:opacity-50"
+                className="min-h-11 w-full rounded-[10px] bg-primary px-4 py-2 text-[12px] font-bold text-white transition-opacity disabled:opacity-50 sm:w-auto sm:self-end"
               >
                 OK
               </button>

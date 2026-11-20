@@ -15,7 +15,7 @@ import {
   advanceOfflineGeneration,
 } from "@/lib/auth/offline-identity";
 import { resolveUnreachableOfflineRoute } from "@/lib/state/snapshot-db";
-import { Lock, Mail, ArrowRight } from "lucide-react";
+import { Lock, Mail, ArrowRight, Eye, EyeOff } from "lucide-react";
 import { Splash } from "@/components/Splash";
 
 type AuthState = "loading" | "login" | "unlocked";
@@ -511,6 +511,7 @@ function LoginForm({
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
@@ -595,7 +596,7 @@ function LoginForm({
               </span>
               <input
                 id="password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => {
@@ -607,10 +608,20 @@ function LoginForm({
                 }}
                 placeholder="••••••••"
                 autoComplete="current-password"
+                enterKeyHint="go"
                 required
                 disabled={submitting}
-                className="w-full rounded-[14px] border border-border-subtle bg-surface-2 py-3 pl-10 pr-3.5 text-[16px] font-medium text-text-primary outline-none focus:border-primary disabled:opacity-50 transition-colors"
+                className="w-full rounded-[14px] border border-border-subtle bg-surface-2 py-3 pl-10 pr-11 text-[16px] font-medium text-text-primary outline-none focus:border-primary disabled:opacity-50 transition-colors"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                aria-pressed={showPassword}
+                className="absolute right-1.5 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
             </div>
           </fieldset>
         </div>

@@ -201,12 +201,25 @@ describe("RecordsPage", () => {
       expect(screen.queryByText("Salário Junho")).not.toBeInTheDocument();
     });
 
-    it("filters by search text", () => {
+    it("filters by search text and exposes persistent label and direct clear button (mobile audit 05)", () => {
       render(<RecordsPage />);
-      const searchInput = screen.getByPlaceholderText(/buscar/i);
+      const searchInput = screen.getByLabelText("Buscar lançamento");
       fireEvent.change(searchInput, { target: { value: "Uber" } });
       expect(screen.getByText("Uber para casa")).toBeInTheDocument();
       expect(screen.queryByText("Supermercado Extra")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Limpar busca" }));
+      expect(screen.getByText("Supermercado Extra")).toBeInTheDocument();
+    });
+
+    it("allows direct removal of active filters outside the filter sheet (mobile audit 05)", () => {
+      render(<RecordsPage />);
+      fireEvent.click(screen.getByTestId("filter-trigger"));
+      fireEvent.click(screen.getByText("Despesas"));
+      expect(screen.queryByText("Salário Junho")).not.toBeInTheDocument();
+      const activeBar = screen.getByTestId("active-filters-bar");
+      expect(activeBar).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Remover filtro Despesas/i }));
+      expect(screen.getByText("Salário Junho")).toBeInTheDocument();
     });
 
     it("shows empty state when no results match", () => {

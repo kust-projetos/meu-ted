@@ -814,36 +814,54 @@ export default function CardsPage() {
               const availCents = card.creditLimitCents - card.spentCents;
               const masked = formatMaskedNumber(getLastFour(card.id));
               return (
-                <button type="button" key={card.id} aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`} onClick={() => setSelectedCardId(card.id)} className="flex w-full max-w-[440px] cursor-pointer flex-col gap-2 rounded-[16px] text-left focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none">
+                <button
+                  type="button"
+                  key={card.id}
+                  aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`}
+                  onClick={() => setSelectedCardId(card.id)}
+                  className="flex w-full max-w-[440px] cursor-pointer flex-col overflow-hidden rounded-[20px] border border-border-subtle bg-surface-1 text-left shadow-card transition-all hover:border-border-medium active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                >
                   <BankCard
                     bankId={card.institution?.id ?? preset.id}
                     product={card.product}
                     cardName={card.name}
                     maskedNumber={masked}
                     network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
+                    compact
+                    className="rounded-none shadow-none"
                   />
-                  <div className="rounded-[16px] border border-border-subtle bg-surface-1 p-3 shadow-card">
-                    <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] font-medium text-text-muted">
-                      <span className="min-w-0 truncate">Fecha dia {card.closingDay} · vence dia {card.dueDay}</span>
-                      <span className="shrink-0 whitespace-nowrap font-bold" style={{ color: preset.primaryColor }}>
-                        {preset.name}
-                      </span>
+                  <div className="border-t border-border-subtle p-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-text-muted">Fatura atual</div>
+                        <div className="font-mono tabular-nums text-[20px] font-bold leading-tight text-text-primary">
+                          {formatBRL(card.spentCents)}
+                        </div>
+                      </div>
+                      <div className="min-w-0 text-right">
+                        <div className="font-mono tabular-nums text-[12px] font-bold text-primary">
+                          Disponível {formatBRL(availCents)}
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] font-medium text-text-muted">
+                          Fecha dia {card.closingDay} · vence dia {card.dueDay}
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 text-[11px] font-medium text-text-muted">Fatura atual</div>
-                    <div className="font-mono tabular-nums text-[18px] font-bold text-text-primary">{formatBRL(card.spentCents)}</div>
                     <div
                       role="progressbar"
                       aria-label={`Uso do limite: ${formatPct(card.pct)}`}
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-valuenow={card.pct}
-                      className="mt-2 h-[6px] rounded-full bg-surface-2 overflow-hidden"
+                      className="mt-2.5 h-[6px] overflow-hidden rounded-full bg-surface-2"
                     >
                       <div className="h-full rounded-full transition-all duration-300" style={{ width: `${card.pct}%`, background: preset.gradient }} />
                     </div>
-                    <div className="mt-1.5 flex justify-between font-mono tabular-nums text-[11px] font-semibold text-text-muted">
-                      <span>Limite total {formatBRL(card.creditLimitCents)}</span>
-                      <span>Disponível {formatBRL(availCents)}</span>
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-text-muted">
+                      <span className="font-mono tabular-nums">Limite total {formatBRL(card.creditLimitCents)}</span>
+                      <span className="shrink-0 whitespace-nowrap font-bold" style={{ color: preset.primaryColor }}>
+                        {preset.name}
+                      </span>
                     </div>
                   </div>
                 </button>
@@ -896,13 +914,15 @@ export default function CardsPage() {
                 </div>
 
                 {/* Cartão e dados da fatura em uma única superfície */}
-                <div className="overflow-hidden rounded-[18px] border border-border-subtle bg-surface-1 shadow-card lg:max-w-[440px]">
+                <div className="overflow-hidden rounded-[20px] border border-border-subtle bg-surface-1 shadow-card lg:max-w-[440px]">
                   <BankCard
                     bankId={card.institution?.id ?? preset.id}
                     product={card.product}
                     cardName={card.name}
                     maskedNumber={masked}
                     network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
+                    compact
+                    className="rounded-none shadow-none"
                   />
                   <div className="border-t border-border-subtle p-4">
                   <div className="grid grid-cols-2 gap-3">

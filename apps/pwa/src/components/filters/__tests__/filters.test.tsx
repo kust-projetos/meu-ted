@@ -43,6 +43,8 @@ describe("FilterPillBar", () => {
     fireEvent.change(screen.getByLabelText("Data inicial personalizada"), { target: { value: "2026-01-01" } });
     fireEvent.change(screen.getByLabelText("Data final personalizada"), { target: { value: "2026-01-31" } });
     expect(screen.getByRole("button", { name: "OK" })).not.toBeDisabled();
+    expect(screen.getByTestId("period-custom-dates").className).toContain("flex-col");
+    expect(screen.getByTestId("period-custom-dates").className).toContain("sm:flex-row");
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(onPeriodChange).toHaveBeenCalledWith("custom", { from: "2026-01-01", to: "2026-01-31" });
   });

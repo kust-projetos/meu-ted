@@ -31,13 +31,14 @@ describe("BottomNav", () => {
       expect(nav?.tagName).toBe("NAV");
     });
 
-    it("renders the 4 canonical items + FAB (item 13)", () => {
+    it("renders the 4 canonical items + FAB with visible label (item 13 + mobile audit 03)", () => {
       renderNav();
       expect(screen.getByText("Início")).toBeInTheDocument();
       expect(screen.getByText("Extrato")).toBeInTheDocument();
       expect(screen.getByText("Cartões")).toBeInTheDocument();
       expect(screen.getByText("Relatórios")).toBeInTheDocument();
       expect(screen.getByLabelText("Novo lançamento")).toBeInTheDocument();
+      expect(screen.getByTestId("fab-visible-label")).toHaveTextContent("Lançar");
     });
   });
 
@@ -104,12 +105,12 @@ describe("BottomNav", () => {
       expect(screen.queryByRole("group", { name: "Ações de novo lançamento" })).not.toBeInTheDocument();
     });
 
-    it("navigates to /capture for Ler Comprovante", async () => {
+    it("navigates to /ted?from=comprovante for Ler Comprovante", async () => {
       const user = userEvent.setup();
       renderNav();
       await user.click(screen.getByLabelText("Novo lançamento"));
       await user.click(screen.getByText("Ler Comprovante"));
-      expect(navigation.push).toHaveBeenCalledWith("/capture");
+      expect(navigation.push).toHaveBeenCalledWith("/ted?from=comprovante");
     });
 
     it("closes the disclosure on Escape and returns focus to the FAB", async () => {

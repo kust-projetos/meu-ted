@@ -97,6 +97,13 @@ describe("ReportsAnalyticsZone", () => {
     render(<ReportsAnalyticsZone accounts={ACCOUNTS} />);
 
     await waitFor(() => expect(screen.getByTestId("reports-kpi-grid")).toBeInTheDocument());
+    const summary = screen.getByTestId("reports-cashflow-summary");
+    expect(within(summary).getByText("Entrou")).toBeInTheDocument();
+    expect(within(summary).getByText("R$ 4.000,00")).toBeInTheDocument();
+    expect(within(summary).getByText("Saiu")).toBeInTheDocument();
+    expect(within(summary).getByText("R$ 3.000,00")).toBeInTheDocument();
+    expect(within(summary).getByText("Sobrou")).toBeInTheDocument();
+    expect(within(summary).getByText("R$ 1.000,00")).toBeInTheDocument();
     expect(screen.getByText("Taxa de poupança real")).toBeInTheDocument();
     expect(screen.getByText("25.0%")).toBeInTheDocument();
     expect(screen.getByText("Patrimônio líquido")).toBeInTheDocument();
