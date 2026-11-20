@@ -8,6 +8,14 @@ P5. Este runbook não autoriza novas alterações de capacidade.
 
 ## Estado efetivo observado (2026-11-19)
 
+Reconciliação V2.1 (2026-11-19, fatos operacionais): PRs **#455–#459** integrados;
+**P5 PASS** e **Jornada C PASS 4/4 em ambiente sintético com LLM real**. Isso
+valida o harness/runtime em ambiente controlado — **não** é validação em produção.
+**Smoke/homologação em produção: pendente** (não há evidência registrada; não
+inventar resultado). A0 (`apps/agent`) descontinuado em 2026-11-17;
+`apps/ted-runtime` é o único runtime conversacional. #245 é manutenção futura,
+não pré-requisito da V2.1.
+
 - Histórico (2026-11-18): gateway com `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`;
   não havia cliente de autoexecução e `categories.create` autoexec não estava ativa.
 - Estado atual (2026-11-19): gateway `ted-runtime:main` na imagem
@@ -23,11 +31,39 @@ P5. Este runbook não autoriza novas alterações de capacidade.
 - Antes de qualquer redeploy ou mudança de flag, faça backup da configuração. `writeTedConfig` reconhece configurações geradas por versões anteriores com qualquer combinação de `p3Writes`, `productPrompt` e `categoryMemory` e as reescreve conforme as flags solicitadas; assim, uma transição não falha fechado apenas por existir um `opencode.json` gerado desatualizado. Um override nativo legítimo de `model` continua preservado. Edições arbitrárias do usuário e symlinks continuam recusados, sem sobrescrita/seguimento. Qualquer mudança de flag requer autorização explícita do operador.
 - Rollback: backup `docker-compose.yml.bak-pre-category-flip` restaura a
   configuração anterior (flag `0`); também é possível usar
-  `ted-runtime:rollback-pre-9dc5d1c`. A jornada C com modelo real ainda não foi
-  homologada após o flip.
+  `ted-runtime:rollback-pre-9dc5d1c`. A Jornada C passou (**4/4**) em ambiente
+  sintético com LLM real após o flip; a homologação/smoke em produção segue
+  **pendente**.
 - O gateway de produção não tem o fetch guard live-real do harness; as
   correções do PR #456 são apenas do harness/runtime de teste e não rodam em
   produção.
+
+## Publicar / alterar a flag no compose
+
+O `docker/ted-runtime/docker-compose.yml` interpola a variável com default
+seguro: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED: ${TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED:-1}`.
+O default `1` preserva o valor efetivo já autorizado na VPS — um deploy sem a
+variável definida no host **não** desliga a capacidade por acidente. Para mudar
+o valor, **nunca edite o compose versionado**: defina
+`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` no ambiente do host ou no `.env` usado
+pelo `docker compose`, com autorização explícita do operador.
+
+Sequência para publicar/alterar (sempre com autorização do operador):
+
+1. Faça backup da configuração atual (`docker-compose.yml` e `opencode.json`).
+2. Confirme no host o valor desejado (`1` = ativo; `0` = intent-only), o SHA da
+   imagem e a tag de rollback `ted-runtime:rollback-pre-9dc5d1c`.
+3. Redeploy do gateway com o compose versionado; verifique health, boot limpo
+   (sem as falhas de `writeTedConfig`) e a flag efetiva dentro do container.
+4. Registre evidência real. Hoje a homologação em produção está **pendente**:
+   P5 PASS e Jornada C PASS 4/4 existem apenas em ambiente sintético com LLM real.
+
+**Rollback (voltar para `0`):** defina
+`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no host/`.env` e redeploy. O runtime
+volta ao comportamento `intent-only` (`categories.create` propõe, não executa);
+API, ledger e dados não são alterados. Em caso de emergência, use também o
+backup `docker-compose.yml.bak-pre-category-flip` ou a tag
+`ted-runtime:rollback-pre-9dc5d1c`. Nunca registre credenciais no repositório.
 
 ## Flags e escopo
 
@@ -46,8 +82,11 @@ O `docker/ted-runtime/docker-compose.yml` define:
 
 - `TED_OPENCODE_PRODUCT_PROMPT_ENABLED=1`: inclui as instruções de produto.
 - `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1`: habilita memória local e recall.
-- `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`: autoexecução de categoria está
-  ativa no gateway por autorização do operador; não habilita outras categorias.
+- `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED`: interpolado como
+  `${TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED:-1}` (default `1` = ativo, valor
+  efetivo na VPS por autorização do operador); não habilita outras categorias.
+  Sobrescreva no host/`.env` com `0` para rollback — veja "Publicar / alterar a
+  flag no compose" acima.
 - `TED_PENDING_MINT_TOKEN` e `TED_WORKSPACE_DELETION_SERVICE_TOKEN` são
   credenciais opcionais no compose, mas necessárias para o corte das rotas de
   pending/atestado. Sem elas, essas rotas falham fechado. Nunca registre seus
@@ -110,4 +149,6 @@ as flags ainda exigem autorização e provisionamento pelo operador.
 
 ## Pendências operacionais
 
-- Homologar a jornada C com modelo real após o flip.
+- Histórico: a Jornada C foi homologada em ambiente sintético com LLM real
+  (**PASS 4/4**), assim como P5 (**PASS**, PRs #455–#459). **Pendente:** smoke /
+  homologação em produção — não há evidência de validação em produção registrada.

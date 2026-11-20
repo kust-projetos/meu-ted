@@ -60,4 +60,5 @@ atestação.
 - R2/DO foram preservados por decisão do operador.
 - Autoexecução de categoria segue desligada:
   `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED`.
+  > **HISTÓRICO (2026-11-19):** afirmação de 17/11; a flag foi autorizada para `1` em 19/11. Estado atual em `../2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md`.
 - `PENDING_V2_SUPERSEDE_ENABLED` é necessário para correção em produção.

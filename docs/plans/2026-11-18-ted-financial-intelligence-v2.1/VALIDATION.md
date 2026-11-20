@@ -1,5 +1,11 @@
 # MEU TED Financial Intelligence V2.1 — Inteligência financeira autônoma
 
+> **HISTÓRICO (2026-11-18 a 19):** o corpo deste documento registra o estado e
+> as rodadas até 19/11, quando `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` e P5
+> era INCONCLUSIVE/FAIL. As afirmações de flag `0` e de P5 INCONCLUSIVE abaixo
+> são **históricas**, não atuais. O estado efetivo atual está em "Estado efetivo
+> V2.1 (2026-11-19 — reconciliação)" ao final.
+
 ## Decisão e baseline
 
 Desenvolvimento executado sem mudança arquitetural nem A0/broker. Em 2026-11-18, o operador escolheu explicitamente **“Publicar e ativar capacidades novas”** e autorizou o deploy de produção da V2.1. O deploy foi executado com sucesso; baseline atual de produção: `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior: `79d8b09`).
@@ -84,7 +90,7 @@ A próxima prioridade é homologação operacional em ambiente controlado, com h
 
 ## Flags desativadas e habilitação controlada futura
 
-No estado observado em produção em 2026-11-18, API/PWA executam código no SHA `9dc5d1c` (main `6a0d9b4`, um commit somente de documentação à frente; paridade de código). `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; o token dedicado de categoria está provisionado (`TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN`), mas o gateway não cria cliente de autoexecução enquanto a flag estiver 0. `TED_RISK_BASED_AUTOEXECUTE=on` é valor preexistente da API. `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1` estão efetivos em produção.
+**HISTÓRICO (2026-11-18):** no estado observado em produção em 2026-11-18, API/PWA executam código no SHA `9dc5d1c` (main `6a0d9b4`, um commit somente de documentação à frente; paridade de código). `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; o token dedicado de categoria estava provisionado (`TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN`), mas o gateway não criava cliente de autoexecução enquanto a flag estivesse 0. `TED_RISK_BASED_AUTOEXECUTE=on` é valor preexistente da API. `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_OPENCODE_CATEGORY_MEMORY_ENABLED=1` estão efetivos em produção.
 
 Habilitação futura deve: provisionar o token dedicado fora do repo, exigir dono da conversa (pin B), manter a política server-side da API e NUNCA ativar autoexecução de movimentações financeiras.
 
@@ -104,13 +110,13 @@ O operador autorizou explicitamente **“Publicar e ativar capacidades novas”*
 
 - **Baseline de produção:** `9dc5d1c65883bfbce4dabaf43b2759919843f8e1` (anterior `79d8b09`).
 - **API:** wrapper `scripts/ops/api-release-20260930.sh`, lane source-build, CI run `44330661848`; backup `pre-90ec37f-20261118` (sha256 `f3dc4886165fd8b03f4a929c08286f5ad59a6adbfb7453449b77bb7ddef5d48a`); rollback tag `pi-finance-api:rollback-pre-9dc5d1c`. Health ao vivo `{"status":"ok","gitSha":"9dc5d1c...","buildId":"44330661848"}` e `/ready`=200.
-- **Gateway ted-runtime:** rollback tag `ted-runtime:rollback-pre-9dc5d1c`; `opencode.json` foi regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token dedicado de categoria provisionado (valor fora do repositório); flag efetiva `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; container healthy; rota `/api/agent/agents/finance-chat-agent/{workspace}/rpc/pending-operations/active` retorna 401 `auth.session_required` sem sessão (rota existe).
+- **HISTÓRICO (2026-11-18) — Gateway ted-runtime:** rollback tag `ted-runtime:rollback-pre-9dc5d1c`; `opencode.json` foi regenerada pelo bootstrap, backup `opencode.json.bak-pre-9dc5d1c`; token dedicado de categoria provisionado (valor fora do repositório); flag efetiva `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; container healthy; rota `/api/agent/agents/finance-chat-agent/{workspace}/rpc/pending-operations/active` retornava 401 `auth.session_required` sem sessão (rota existe).
 - **PWA:** workflow `PWA Deploy`, run `44336496351` no SHA `9dc5d1c`; gate, deploy, smoke e attestation todos success; `/api/build-info` informa `gitSha` `9dc5d1c...`.
 - **Capacidades:** autoexecução de `categories.create` **não está ativa**: flag do gateway efetiva `0`, embora API tenha `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1` e `TED_RISK_BASED_AUTOEXECUTE=on` preexistente. A API permite autoautorização apenas para `transactions.expense.create`/`income.create` abaixo de 50000 cents; a partir de 50000 cents exige confirmação. `categories.create` depende do autocreate habilitado e política `auto_execute`, mas o TED não a aciona sem cliente no gateway. Transferências, cartões, contas a pagar, metas, orçamentos e atualizações não são autoexecutáveis.
 
 **Ressalva:** o deploy de código ocorreu sem homologação integral prévia com LLM real. A configuração efetiva pós-deploy observada não ativou autoexecução de categoria. P5 continua INCONCLUSIVE; os smokes acima não equivalem à homologação da jornada financeira ponta a ponta.
 
-## Validação pós-deploy (2026-11-18)
+## Validação pós-deploy (HISTÓRICO 2026-11-18)
 
 | Configuração | Esperado/documentado | Efetivo observado | Risco | Correção necessária |
 | --- | --- | --- | --- | --- |
@@ -184,23 +190,45 @@ evidência de falha da UI registrada na issue #440; não reclassificar essas
 execuções como INCONCLUSIVE. A causa não é atribuída aqui. **V2.1 não está
 homologada**, e nenhuma homologação com LLM real foi realizada nesta missão.
 
-O fix de boot #442 (`writeTedConfig`, merge `f58143b`) está integrado em
-`main`, mas **não publicado**. A flag
-`TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` permanece inalterada. Publicar #442
-exige autorização explícita separada; a correção de boot não depende da
-homologação P5.
+**HISTÓRICO (registro de 2026-11-19, antes do flip autorizado):** o fix de boot
+#442 (`writeTedConfig`, merge `f58143b`) estava integrado em `main`, mas **não
+publicado** naquele momento. A flag `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`
+permanecia inalterada nesse registro. Publicar #442 exigia autorização explícita
+separada; a correção de boot não dependia da homologação P5. Não descreve o
+estado atual.
 
-### Plano de publicação de #442 (não executado)
+### Plano de publicação de #442 (HISTÓRICO — registrado em 2026-11-19, antes do flip; não executado nessa forma)
 
 Após autorização do operador:
 
 1. Verificar a versão atual da imagem antes de qualquer ação.
 2. Preservar backups de `opencode.json` e das flags atuais.
-3. Manter `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` e todas as demais flags
-   inalteradas.
+3. **HISTÓRICO:** manter `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` e todas as
+   demais flags inalteradas (superado pelo flip autorizado de 2026-11-19).
 4. Após publicar, validar health, boot sem as 14 falhas de `writeTedConfig` e
    acesso autenticado.
 5. Preservar o rollback `ted-runtime:rollback-pre-9dc5d1c` e os backups
    `opencode.json.bak-pre-9dc5d1c` e `opencode.json.bak-pre-79d8b09`.
 
 Este plano não autoriza publicação, acesso à VPS nem mudança de configuração.
+
+## Estado efetivo V2.1 (2026-11-19 — reconciliação)
+
+Esta seção reflete os registros operacionais e substitui, para fins de estado
+atual, as classificações históricas de flag `0` / P5 INCONCLUSIVE acima.
+
+- **Gateway:** `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` na VPS desde
+  2026-11-19, ativado com autorização do operador após homologação P5. O
+  `docker/ted-runtime/docker-compose.yml` interpola a variável com default `1`,
+  preservando esse valor efetivo; rollback = `0` no host/`.env` + redeploy
+  (ver [runbook](../../runbooks/ted-runtime-paridade-flags.md)).
+- **API (inalterada):** `TED_RISK_BASED_AUTOEXECUTE=on`,
+  `PENDING_V2_SUPERSEDE_ENABLED=1` e
+  `PENDING_V2_CATEGORY_AUTOCREATE_ENABLED=1`. Token dedicado de categoria
+  provisionado fora do repositório; autoexecução restrita a `categories.create`.
+- **Homologação:** PRs **#455–#459** integrados; **P5 PASS** e **Jornada C PASS
+  4/4** em **ambiente sintético com LLM real** (validação de harness/runtime em
+  ambiente controlado). **Validação/smoke em produção: pendente** — não há
+  evidência registrada de validação em produção; nenhum resultado inventado.
+- **Topologia:** A0 descontinuado em 2026-11-17; `apps/ted-runtime` é o único
+  runtime conversacional. #245 é manutenção futura, não pré-requisito da V2.1.

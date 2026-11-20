@@ -1,6 +1,6 @@
 # Meu Ted - Arquitetura atual
 
-**Last verified:** 2026-11-18
+**Last verified:** 2026-11-19
 **Reference:** [`runtime-facts.json`](architecture/runtime-facts.json)
 
 ## Topologia implementada
@@ -18,7 +18,17 @@ graph TD
 
 Em produção, o Worker A0 foi removido; o gateway é o runtime único. R2/DO foram preservados.
 
-Configuração efetiva observada em 2026-11-18: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no gateway, `TED_RISK_BASED_AUTOEXECUTE=on` na API (preexistente), e autocreate de categoria/supersede Pending V2 habilitados na API. O gateway não cria cliente de autoexecução com a flag em `0`; portanto `categories.create` autoexec não está ativa.
+**Estado efetivo V2.1 (2026-11-19):** `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1`
+no gateway (autorizado pelo operador em 2026-11-19; compose interpola a variável
+com default `1`), `TED_RISK_BASED_AUTOEXECUTE=on` na API (preexistente) e
+autocreate de categoria/supersede Pending V2 habilitados na API. A autoexecução
+de `categories.create` está ativa apenas para essa operação. PRs **#455–#459**
+integrados; **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM
+real**. **Validação/smoke em produção: pendente** (não há evidência registrada).
+
+**HISTÓRICO (2026-11-18):** `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0` no
+gateway; sem cliente de autoexecução, `categories.create` autoexec não estava
+ativa. Registro mantido apenas como histórico; não reflete o estado atual.
 
 ## Responsabilidades e limites
 

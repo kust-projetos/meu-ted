@@ -3,9 +3,16 @@
 ## Unreleased (2026-11-18)
 
 - Descontinuado e removido o runtime A0 (`apps/agent`) do workspace, build e CI; `apps/ted-runtime` permanece como único runtime conversacional e a API continua autoridade financeira. Recursos e dados históricos de produção não foram removidos.
-- Configuração pós-deploy observada: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; `categories.create` autoexec não está ativa, apesar de token provisionado e autocreate API habilitado. P5 com LLM real permanece INCONCLUSIVE. Evidências em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md).
+- **HISTÓRICO (2026-11-18):** configuração pós-deploy observada naquele momento: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=0`; `categories.create` autoexec não estava ativa, apesar de token provisionado e autocreate API habilitado. P5 com LLM real permaneceu INCONCLUSIVE. Evidências em [VALIDATION.md](docs/plans/2026-11-18-ted-financial-intelligence-v2.1/VALIDATION.md). Não reflete o estado atual — ver seção 2026-11-19 abaixo.
 - PR #435 (`fix(gateway): inject category autoexec mint token into compose`) mesclado antes do deploy para disponibilizar o token dedicado no compose do gateway.
 - Corte TED OpenCode-only histórico, registrado no baseline `79d8b09`; o baseline atual observado de produção é `9dc5d1c` (API/PWA; runtime conforme validação pós-deploy). Worker A0 removido em produção; R2/DO preservados.
+
+## Unreleased (2026-11-19 — reconciliação V2.1; somente docs/config, sem deploy)
+
+- Estado efetivo V2.1: `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED=1` no gateway (autorizado pelo operador em 2026-11-19); o compose passa a interpolar a variável com default `1`, preservando o valor da VPS — rollback = definir `0` no host/`.env` e redeploy (ver [runbook](docs/runbooks/ted-runtime-paridade-flags.md)). PRs **#455–#459** integrados; autoexecução restrita a `categories.create`.
+- Homologação: **P5 PASS** e **Jornada C PASS 4/4** em **ambiente sintético com LLM real** — isso valida o harness/runtime, não a produção. **Smoke/homologação em produção: pendente**; nenhuma evidência de validação em produção foi registrada, e nenhum resultado é inventado aqui.
+- A0 descontinuado em 2026-11-17; `apps/ted-runtime` é o único runtime conversacional. #245 é manutenção futura, não pré-requisito da V2.1.
+- Esta mudança é apenas documentação e configuração versionada: sem deploy, merge, alteração de flags na VPS ou nova funcionalidade.
 
 ## v1.0.4 (2026-11-13)
 
