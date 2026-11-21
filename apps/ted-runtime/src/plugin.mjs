@@ -11,19 +11,16 @@
 // functions below are exercised deterministically through the test-only
 // helper (tests/helpers/facade.mjs) with a host-bound context.
 //
-// SCOPE (reviewer note on TOOL_DEFS): the spike's TOOL_DEFS array also
-// contains propose_expense. This product registers EXACTLY list_accounts +
-// get_month_summary by default, with complete input AND output schemas (the
-// native loop rejects {output} results from tools registered without an output
-// schema). list_categories (also in TOOL_DEFS) is the bounded P3 prerequisite
-// and is registered ONLY under the local opt-in below — never by default, never
-// in production. No propose/write registration exists in this slice; adding one
-// is a deliberate product decision, not a config change.
+// SCOPE: this product registers EXACTLY list_accounts + get_month_summary by
+// default, with complete input AND output schemas. list_categories and the
+// action tools are registered ONLY under the local opt-ins below — never by
+// default, never implicitly in production. The gateway executes a recorded
+// action in the same turn; there is no approval/card surface in this slice.
 
 import { TOOL_DEFS, createToolExecutors, deriveIntentionId } from './tool-defs.mjs';
 import { resolveHost } from './session-bindings.mjs';
-import { proposalIntentRegistry } from './proposal-intents.mjs';
-import { correctionActionRegistry } from './correction-actions.mjs';
+import { actionIntentRegistry } from './action-intents.mjs';
+import { undoActionRegistry } from './undo-actions.mjs';
 
 export const PRODUCT_TOOL_NAMES = ['list_accounts', 'get_month_summary'];
 
@@ -57,23 +54,21 @@ export const TED_FINANCE_PERMISSION_RESOURCES = Object.freeze([
   'list_payables',
   'payable_reminders',
   'list_audit_logs',
-  'propose_expense',
-  'propose_income',
-  'propose_card_purchase',
-  'propose_transfer',
-  'propose_statement_payment',
-  'propose_account_create',
-  'propose_category_create',
-  'propose_transaction_update',
-  'propose_account_update',
-  'propose_account_deactivate',
-  'propose_category_update',
-  'propose_category_deactivate',
-  'propose_payable_create',
-  'propose_payable_pay',
-  'correct_pending_proposal',
-  'cancel_pending_proposal',
-  'propose_undo_last_action',
+  'record_expense',
+  'record_income',
+  'record_card_purchase',
+  'transfer_between_accounts',
+  'pay_card_statement',
+  'create_account',
+  'create_category',
+  'update_transaction',
+  'rename_account',
+  'deactivate_account',
+  'rename_category',
+  'deactivate_category',
+  'create_payable',
+  'pay_payable',
+  'undo_last_action',
 ]);
 
 // Opt-in reads. Explicit activation only: the operator sets
@@ -103,29 +98,26 @@ export const P3_READ_TOOL_NAMES = [
   'list_audit_logs',
 ];
 
-// P3 write slice: `propose_expense`, `propose_income`, `propose_card_purchase`,
-// `propose_transfer` and `propose_statement_payment` record a proposal intent
-// only (P3.1–P3.6 share the same intent-only contract). Exposed ONLY when the
-// operator sets TED_OPENCODE_P3_WRITES_ENABLED=1 (which also enables the
-// category read). Absent flag = hidden, in every environment.
+// Write slice: action tools record a validated intent and the gateway executes
+// it in the same turn (assurance-gated). Exposed ONLY when the operator sets
+// TED_OPENCODE_P3_WRITES_ENABLED=1 (which also enables the reads). Absent flag
+// = hidden, in every environment.
 export const P3_WRITE_TOOL_NAMES = [
-  'propose_expense',
-  'propose_income',
-  'propose_card_purchase',
-  'propose_transfer',
-  'propose_statement_payment',
-  'propose_account_create',
-  'propose_category_create',
-  'propose_transaction_update',
-  'propose_account_update',
-  'propose_account_deactivate',
-  'propose_category_update',
-  'propose_category_deactivate',
-  'propose_payable_create',
-  'propose_payable_pay',
-  'correct_pending_proposal',
-  'cancel_pending_proposal',
-  'propose_undo_last_action',
+  'record_expense',
+  'record_income',
+  'record_card_purchase',
+  'transfer_between_accounts',
+  'pay_card_statement',
+  'create_account',
+  'create_category',
+  'update_transaction',
+  'rename_account',
+  'deactivate_account',
+  'rename_category',
+  'deactivate_category',
+  'create_payable',
+  'pay_payable',
+  'undo_last_action',
 ];
 
 export function isP3ReadsEnabled(env = process.env) {
@@ -263,11 +255,11 @@ export async function getEffectiveToolNames(pluginCtx) {
 // process.env) — lets tests prove default-off/opt-in/production-off without
 // mutating process state.
 // Returns the plugin definition object for Plugin.define(id, setup).
-export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env, proposalIntents = proposalIntentRegistry, correctionActions = correctionActionRegistry } = {}) {
+export function defineTedFinancePlugin(transportFactory, { onEffectiveTools = null, env = process.env, actionIntents = actionIntentRegistry, undoActions = undoActionRegistry } = {}) {
   if (typeof transportFactory !== 'function') {
     throw new Error('defineTedFinancePlugin: transportFactory (() => transport) is required');
   }
-  const executors = createToolExecutors(transportFactory(), { proposalIntents, correctionActions });
+  const executors = createToolExecutors(transportFactory(), { actionIntents, undoActions });
   return {
     id: 'ted-finance',
     async setup(ctx) {

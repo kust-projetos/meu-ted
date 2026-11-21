@@ -17,7 +17,7 @@ import {
   ToolError,
 } from '../src/tool-defs.mjs';
 import { productToolDefs, P3_WRITE_TOOL_NAMES } from '../src/plugin.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -33,11 +33,11 @@ const ACC = '22222222-2222-4222-8222-222222222222';
 const CAT = '33333333-3333-4333-8333-333333333333';
 
 const NEW_PROPOSALS = [
-  'propose_transaction_update',
-  'propose_account_update',
-  'propose_account_deactivate',
-  'propose_category_update',
-  'propose_category_deactivate',
+  'update_transaction',
+  'rename_account',
+  'deactivate_account',
+  'rename_category',
+  'deactivate_category',
 ];
 
 describe('v1 proposal tools: catalog and structural validation', () => {
@@ -54,23 +54,23 @@ describe('v1 proposal tools: catalog and structural validation', () => {
 
   it('transaction update accepts only the description tuple (no amount/date/account/category)', () => {
     const valid = { transactionId: TX, description: 'Mercado novo', expectedDescription: 'Mercado' };
-    assert.deepEqual(validateToolArgs('propose_transaction_update', valid), valid);
+    assert.deepEqual(validateToolArgs('update_transaction', valid), valid);
     for (const extra of ['amountCents', 'date', 'accountId', 'categoryId', 'kind']) {
       assert.throws(
-        () => validateToolArgs('propose_transaction_update', { ...valid, [extra]: 'x' }),
+        () => validateToolArgs('update_transaction', { ...valid, [extra]: 'x' }),
         /unknown arg/,
         `${extra} must be rejected`,
       );
     }
-    assert.throws(() => validateToolArgs('propose_transaction_update', { ...valid, transactionId: 'x' }), /transactionId must be a uuid/);
-    assert.throws(() => validateToolArgs('propose_transaction_update', { ...valid, description: '   ' }), /description must be/);
-    assert.throws(() => validateToolArgs('propose_transaction_update', { ...valid, expectedDescription: '   ' }), /expectedDescription must be/);
+    assert.throws(() => validateToolArgs('update_transaction', { ...valid, transactionId: 'x' }), /transactionId must be a uuid/);
+    assert.throws(() => validateToolArgs('update_transaction', { ...valid, description: '   ' }), /description must be/);
+    assert.throws(() => validateToolArgs('update_transaction', { ...valid, expectedDescription: '   ' }), /expectedDescription must be/);
   });
 
   it('rename tools require the exact CAS name', () => {
     for (const [tool, idKey, id] of [
-      ['propose_account_update', 'accountId', ACC],
-      ['propose_category_update', 'categoryId', CAT],
+      ['rename_account', 'accountId', ACC],
+      ['rename_category', 'categoryId', CAT],
     ]) {
       const valid = { [idKey]: id, name: 'Novo', expectedName: 'Atual' };
       assert.deepEqual(validateToolArgs(tool, valid), valid);
@@ -80,37 +80,37 @@ describe('v1 proposal tools: catalog and structural validation', () => {
   });
 
   it('deactivate tools validate the target (accounts also accept a display snapshot)', () => {
-    assert.deepEqual(validateToolArgs('propose_account_deactivate', { accountId: ACC }), { accountId: ACC });
-    assert.deepEqual(validateToolArgs('propose_account_deactivate', { accountId: ACC, accountName: 'Antiga' }), { accountId: ACC, accountName: 'Antiga' });
-    assert.throws(() => validateToolArgs('propose_account_deactivate', { accountId: ACC, expectedName: 'x' }), /unknown arg/);
-    assert.throws(() => validateToolArgs('propose_category_deactivate', { categoryId: CAT }), /expectedName must be/);
-    assert.deepEqual(validateToolArgs('propose_category_deactivate', { categoryId: CAT, expectedName: 'Mercado' }), { categoryId: CAT, expectedName: 'Mercado' });
+    assert.deepEqual(validateToolArgs('deactivate_account', { accountId: ACC }), { accountId: ACC });
+    assert.deepEqual(validateToolArgs('deactivate_account', { accountId: ACC, accountName: 'Antiga' }), { accountId: ACC, accountName: 'Antiga' });
+    assert.throws(() => validateToolArgs('deactivate_account', { accountId: ACC, expectedName: 'x' }), /unknown arg/);
+    assert.throws(() => validateToolArgs('deactivate_category', { categoryId: CAT }), /expectedName must be/);
+    assert.deepEqual(validateToolArgs('deactivate_category', { categoryId: CAT, expectedName: 'Mercado' }), { categoryId: CAT, expectedName: 'Mercado' });
   });
 });
 
 describe('v1 proposal tools: intent only', () => {
   it('records exact normalized args and never calls the transport', async () => {
-    const registry = createProposalIntentRegistry();
+    const registry = createActionIntentRegistry();
     let transportCalls = 0;
-    const executors = createToolExecutors(async () => { transportCalls += 1; throw new Error('transport must not run'); }, { proposalIntents: registry });
+    const executors = createToolExecutors(async () => { transportCalls += 1; throw new Error('transport must not run'); }, { actionIntents: registry });
     const opts = { intentionId: 'int-v1', sessionID: 'ses-v1' };
 
     const cases = [
-      ['propose_transaction_update', { transactionId: TX, description: ' Mercado novo ', expectedDescription: 'Mercado antigo' },
+      ['update_transaction', { transactionId: TX, description: ' Mercado novo ', expectedDescription: 'Mercado antigo' },
         { transactionId: TX, description: 'Mercado novo', expectedDescription: 'Mercado antigo' }, 'transactions.update'],
-      ['propose_account_update', { accountId: ACC, name: ' Reserva ', expectedName: 'Aurora' },
+      ['rename_account', { accountId: ACC, name: ' Reserva ', expectedName: 'Aurora' },
         { accountId: ACC, name: 'Reserva', expectedName: 'Aurora' }, 'accounts.update'],
-      ['propose_account_deactivate', { accountId: ACC, accountName: ' Antiga ' },
+      ['deactivate_account', { accountId: ACC, accountName: ' Antiga ' },
         { accountId: ACC, accountName: 'Antiga' }, 'accounts.deactivate'],
-      ['propose_category_update', { categoryId: CAT, name: ' Supermercado ', expectedName: 'Mercado' },
+      ['rename_category', { categoryId: CAT, name: ' Supermercado ', expectedName: 'Mercado' },
         { categoryId: CAT, name: 'Supermercado', expectedName: 'Mercado' }, 'categories.update'],
-      ['propose_category_deactivate', { categoryId: CAT, expectedName: 'Mercado' },
+      ['deactivate_category', { categoryId: CAT, expectedName: 'Mercado' },
         { categoryId: CAT, expectedName: 'Mercado' }, 'categories.deactivate'],
     ];
 
     for (const [tool, args, expectedArgs, expectedTool] of cases) {
       const out = await executors[tool](args, host, opts);
-      assert.equal(out.status, 'proposed');
+      assert.equal(out.status, 'recorded');
       assert.equal(typeof out.summary, 'string');
       assert.ok(out.summary.length > 0);
       const intent = registry.take('ses-v1');
@@ -122,15 +122,15 @@ describe('v1 proposal tools: intent only', () => {
   });
 
   it('fails closed without the registry or a host-bound session', async () => {
-    const registry = createProposalIntentRegistry();
-    const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }), { proposalIntents: registry });
+    const registry = createActionIntentRegistry();
+    const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }), { actionIntents: registry });
     await assert.rejects(
-      () => executors.propose_category_update({ categoryId: CAT, name: 'Novo', expectedName: 'Atual' }, host, { intentionId: 'int-x' }),
+      () => executors.rename_category({ categoryId: CAT, name: 'Novo', expectedName: 'Atual' }, host, { intentionId: 'int-x' }),
       (err) => err instanceof ToolError && err.code === 'host_context_required',
     );
     const noRegistry = createToolExecutors(async () => ({ statusCode: 200, body: {} }), {});
     await assert.rejects(
-      () => noRegistry.propose_category_update({ categoryId: CAT, name: 'Novo', expectedName: 'Atual' }, host, { intentionId: 'int-x', sessionID: 'ses-x' }),
+      () => noRegistry.rename_category({ categoryId: CAT, name: 'Novo', expectedName: 'Atual' }, host, { intentionId: 'int-x', sessionID: 'ses-x' }),
       (err) => err instanceof ToolError && err.code === 'tool.unavailable',
     );
   });

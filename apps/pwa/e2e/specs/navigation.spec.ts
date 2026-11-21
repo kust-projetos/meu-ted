@@ -150,9 +150,9 @@ test("[DIRECT-11] direct load /perfil renders shell", async ({ page }) => {
   await assertNoUnexpectedWrites(id);
   assertNoUndeclaredFailures(guard);
 });
-test("[DIRECT-12] direct load /compromissos?aba=pendencias selects the tab", async ({ page }) => {
+test("[DIRECT-12] direct load /compromissos?aba=a-pagar renders accounts to pay", async ({ page }) => {
   const id = tid("direct"); const guard = await setup(page, id);
-  await page.goto("/compromissos?aba=pendencias"); await registerDevice(page);
+  await page.goto("/compromissos?aba=a-pagar"); await registerDevice(page);
   expect(page.url()).toContain("/compromissos");
   await assertNoUnexpectedWrites(id);
   assertNoUndeclaredFailures(guard);
@@ -184,10 +184,10 @@ test("[REDIRECT-03] legacy /cartoes?cardId=<id> preserves the detail param", asy
   expect(page.url()).toContain("cardId=card-1");
   assertNoUndeclaredFailures(guard);
 });
-test("[REDIRECT-04] legacy /pending lands on /compromissos?aba=pendencias", async ({ page }) => {
+test("[REDIRECT-04] legacy /pending lands on /compromissos?aba=a-pagar", async ({ page }) => {
   const id = tid("redirect"); const guard = await setup(page, id);
   await page.goto("/pending"); await registerDevice(page);
-  await expect(page).toHaveURL(/\/compromissos\?aba=pendencias/);
+  await expect(page).toHaveURL(/\/compromissos\?aba=a-pagar/);
   assertNoUndeclaredFailures(guard);
 });
 

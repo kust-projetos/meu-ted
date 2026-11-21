@@ -46,19 +46,10 @@ describe("TedChatPage (/ted)", () => {
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
   });
 
-  it("renders the page-bound chat region without an operationId", async () => {
+  it("renders the page-bound chat region", async () => {
     render(<TedChatPage />);
     expect(await screen.findByRole("region", { name: "Chat com TED" })).toBeInTheDocument();
-    expect(screen.queryByTestId("ted-approval-focused")).not.toBeInTheDocument();
-  });
-
-  it("passes ?operationId= through as the focused operation (honest fallback)", async () => {
-    navigation.search = "operationId=op-missing";
-    render(<TedChatPage />);
-    expect(await screen.findByRole("region", { name: "Chat com TED" })).toBeInTheDocument();
-    expect(
-      await screen.findByText("Operação não encontrada nesta conversa."),
-    ).toBeInTheDocument();
+    expect(screen.queryByTestId("ted-approval-item")).not.toBeInTheDocument();
   });
 
   it("bounds the chat above the fixed BottomNav (no overlap, internal scroll)", async () => {

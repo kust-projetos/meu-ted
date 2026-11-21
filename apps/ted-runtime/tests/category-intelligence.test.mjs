@@ -19,7 +19,7 @@ function executorFor(recorded, body = catalogBody) {
   return createToolExecutors(async ({ route }) => ({
     statusCode: 200,
     body: route.startsWith('/categories') ? body : {},
-  }), { proposalIntents: { record: (...args) => recorded.push(args) } });
+  }), { actionIntents: { record: (...args) => recorded.push(args) } });
 }
 
 async function assertInvalid(promise) {
@@ -33,9 +33,9 @@ test('category create with flag off preserves legacy intent behavior', async () 
   try {
     const recorded = [];
     const tools = executorFor(recorded);
-    await tools.propose_category_create({ name: 'Nova', kind: 'expense' }, host, intention);
-    await tools.propose_category_create({ name: 'Mercado', kind: 'expense' }, host, { ...intention, intentionId: 'duplicate' });
-    await tools.propose_category_create({ name: 'x'.repeat(61), kind: 'income' }, host, { ...intention, intentionId: 'long' });
+    await tools.create_category({ name: 'Nova', kind: 'expense' }, host, intention);
+    await tools.create_category({ name: 'Mercado', kind: 'expense' }, host, { ...intention, intentionId: 'duplicate' });
+    await tools.create_category({ name: 'x'.repeat(61), kind: 'income' }, host, { ...intention, intentionId: 'long' });
     assert.equal(recorded.length, 3);
   } finally {
     if (previous === undefined) delete process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED;
@@ -43,23 +43,18 @@ test('category create with flag off preserves legacy intent behavior', async () 
   }
 });
 
-test('category create with flag on requires catalog and rejects invalid/duplicate names', async () => {
+test('category create ignores the retired autocreate flag; the API owns name validation', async () => {
   const previous = process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED;
   process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED = '1';
   clearCatalog(intention.sessionID);
   try {
     const recorded = [];
     const tools = executorFor(recorded);
-    await assertInvalid(tools.propose_category_create({ name: 'Nova', kind: 'expense' }, host, intention));
-    const returned = await tools.list_categories({}, host, intention);
-    assert.deepEqual(returned, catalogBody);
-    await assertInvalid(tools.propose_category_create({ name: 'x'.repeat(61), kind: 'expense' }, host, intention));
-    await assert.rejects(tools.propose_category_create({ name: 'Mercado', kind: 'expense' }, host, intention),
-      (error) => error.code === 'tool.invalid_args' && !error.message.includes('expense-id-secret') && error.message.includes('Mercado'));
-    await tools.propose_category_create({ name: 'Lazer', kind: 'income' }, host, { ...intention, intentionId: 'other-kind' });
-    await tools.propose_category_create({ name: 'Lazer', kind: 'expense' }, host, { ...intention, intentionId: 'inactive' });
-    await tools.propose_category_create({ name: 'Nova', kind: 'expense' }, host, { ...intention, intentionId: 'valid' });
-    assert.equal(recorded.length, 3);
+    // The runtime no longer keeps a legacy scoped autoexec path: the flag is
+    // inert and the action tool records with no catalog precondition.
+    await tools.create_category({ name: 'Nova', kind: 'expense' }, host, intention);
+    await tools.create_category({ name: 'x'.repeat(61), kind: 'income' }, host, { ...intention, intentionId: 'long' });
+    assert.equal(recorded.length, 2);
   } finally {
     clearCatalog(intention.sessionID);
     if (previous === undefined) delete process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED;

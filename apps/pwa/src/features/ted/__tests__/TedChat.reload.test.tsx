@@ -40,9 +40,7 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     sendAgentMessage: vi.fn(),
-    decidePendingOperation: vi.fn(),
   };
 });
 
@@ -80,101 +78,7 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({ turnId: "t1", status: "completed" });
-    vi.mocked(agentClient.decidePendingOperation).mockResolvedValue({
-      operationId: "pending-v2-1",
-      status: "succeeded",
-      receipt: {
-        mutationId: "mut-pending-v2-1",
-        mutationKind: "transactions.expense.create",
-        status: "succeeded",
-        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
-        operationId: "pending-v2-1",
-        entity: { type: "transaction", id: "tx-pending-v2-1" },
-      },
-    });
-  });
-
-  it("mount after reload with a proposed op renders the card from SERVER state, not local residue", async () => {
-    // FIX-P1: history carries no card data; the live card comes from the
-    // authoritative active list with the server-derived presentation.
-    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      { id: "msg-1", actorId: "user-1", role: "user", content: "gastei 850 no mercado", isOwn: true, createdAt: undefined },
-      {
-        id: "msg-2", actorId: "ted", role: "assistant", content: "Proposta: Mercado. Confirma?", isOwn: false,
-        createdAt: undefined,
-      },
-    ]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([activeItem()]);
-
-    render(<TedChat />);
-
-    // Card values come from the server payload (Valor/Conta/Categoria/Data).
-    expect(await screen.findByText(/Confirmar despesa/)).toBeInTheDocument();
-    expect(screen.getByText("R$ 850,00")).toBeInTheDocument();
-    expect(screen.getByText("Nubank")).toBeInTheDocument();
-    expect(screen.getByText("Alimentação")).toBeInTheDocument();
-    expect(screen.getByText("14/09/2026")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Confirmar R\$ 850,00/ })).toBeInTheDocument();
-    // Nothing was sent locally after mount — no optimistic residue exists.
-    expect(agentClient.sendAgentMessage).not.toHaveBeenCalled();
-    // Never a stale success claim.
-    expect(screen.queryByText(/Operação.*registrada/i)).toBeNull();
-    expect(screen.queryByText(/concluída/i)).toBeNull();
-  });
-
-  it("executing status in the active list shows pt-BR processing (INV-03), never success", async () => {
-    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      {
-        id: "msg-2", actorId: "ted", role: "assistant", content: "Processando.", isOwn: false,
-        createdAt: undefined,
-      },
-    ]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([
-      activeItem({ status: "executing", presentation: { ...serverPresentation, status: "executing" } }),
-    ]);
-
-    render(<TedChat />);
-
-    expect(await screen.findByText(/processando operação/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Operação.*registrada/i)).toBeNull();
-    expect(screen.queryByText(/concluída/i)).toBeNull();
-    expect(screen.queryByRole("button", { name: /aprovar|confirmar/i })).toBeNull();
-  });
-
-  it("succeeded history after reload never renders a pending approval card", async () => {
-    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
-      {
-        id: "msg-success",
-        actorId: "ted",
-        role: "assistant",
-        content: "Despesa registrada com sucesso.",
-        isOwn: false,
-        createdAt: undefined,
-        pendingOperation: {
-          id: "pending-v2-1",
-          status: "succeeded",
-          operation: "transactions.expense.create",
-          receipt: {
-            mutationId: "mut-pending-v2-1",
-            mutationKind: "transactions.expense.create",
-            status: "succeeded",
-            affectedTargets: ["transactions"],
-            operationId: "pending-v2-1",
-            entity: { type: "transaction", id: "tx-pending-v2-1" },
-          },
-        },
-      },
-    ]);
-    // A completed operation cannot be in the authoritative live-active list.
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
-
-    render(<TedChat />);
-
-    expect(await screen.findByText("Despesa registrada com sucesso.")).toBeInTheDocument();
-    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
-    expect(screen.queryByRole("button", { name: /confirmar|aprovar/i })).toBeNull();
   });
 
   it('renders verified terminal feedback on the linked proposal without creating an approval card', async () => {
@@ -187,7 +91,6 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
         receipt: { mutationId: 'mut-1', mutationKind: 'categories.deactivate', status: 'succeeded', affectedTargets: ['categories', 'transactions'], operationId: '00000000-0000-4000-8000-000000000011', entity: { type: 'category', id: 'cat-1' } },
       },
     }]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
 
     render(<TedChat />);
 
@@ -202,7 +105,6 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
       createdAt: undefined, proposalOperationId: '00000000-0000-4000-8000-000000000012', proposalTool: 'categories.deactivate',
       terminalOutcome: { operationId: '00000000-0000-4000-8000-000000000012', tool: 'categories.deactivate', status: 'failed', failureCode: 'in_use' },
     }]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
 
     render(<TedChat />);
 
@@ -249,7 +151,6 @@ describe("TedChat — reload rehydration from authoritative active list (FIX-P1/
     // concluído permanece autoritativo; só o refresh sinaliza staleness.
     const user = userEvent.setup();
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
 
     render(<TedChat />);
     await waitFor(() => expect(agentClient.fetchAgentHistory).toHaveBeenCalled());

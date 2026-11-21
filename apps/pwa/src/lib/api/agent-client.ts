@@ -20,17 +20,10 @@ const historyItemSchema = z.object({
   proposalOperationId: z.unknown().optional(),
   proposalTool: z.unknown().optional(),
   terminalOutcome: z.unknown().optional(),
-  // §25.4 (browser reload during proposed/executing): the server may attach
-  // the authoritative pending operation so the PWA rehydrates the approval
-  // card from SERVER state. Raw input — sanitized in the transform below.
-  pendingOperation: z.unknown().optional(),
-  // ADR-033 S2: read-only self-confirm result echoed on a history item.
+  // ADR-033: read-only self-confirm result echoed on a history item.
   // Raw input — strict allowlist in the transform below (no attestation/hash).
   execution: z.unknown().optional(),
 }).transform((item): AgentMessage => {
-  const pendingOperation = sanitizePendingOperation(
-    item.pendingOperation as AgentTurn["pendingOperation"],
-  );
   const execution = sanitizeSelfConfirmExecution(item.execution);
   const terminalOutcome = sanitizeTerminalOutcome(item.terminalOutcome, item.proposalOperationId, item.proposalTool);
   const proposalOperationId = z.string().uuid().safeParse(item.proposalOperationId);
@@ -48,7 +41,6 @@ const historyItemSchema = z.object({
     ...(terminalOutcome ? { terminalOutcome } : {}),
     // Invalid/absent collapses to no terminal state — never invented data.
     ...(execution ? { execution } : {}),
-    ...(pendingOperation === undefined ? {} : { pendingOperation }),
   };
 });
 
@@ -74,12 +66,6 @@ export type AgentMessage = {
   proposalTool?: string;
   terminalOutcome?: TerminalOutcome;
   /**
-   * §25.4: authoritative pending operation attached to a history item, when
-   * the server emitted one. Same allowlist as the turn path — absent or
-   * invalid means `undefined` (no card), never invented data.
-   */
-  pendingOperation?: AgentTurn["pendingOperation"];
-  /**
    * ADR-033 S2: terminal, read-only result of an agent self-confirmed
    * operation (no Confirm/Cancel). Strictly sanitized at the boundary.
    */
@@ -101,72 +87,6 @@ export function agentBaseUrl(): string {  // ADR-011: canonical browser transpor
   // Preserva token e X-Workspace-Id via forwardHeaders do proxy e evita CORS/misconfig.
   return "/api/agent";
 }
-
-const pendingOperationPresentationLabelSchema = z
-  .object({ id: z.string(), label: z.string() })
-  .strict();
-
-/**
- * T3.4 (SPEC §16): browser-safe card projection. Strict: single-use approval
- * material and authority material are rejected — the card carries display data only.
- * Every field is optional except identity/title/expiry so legacy payloads
- * (old in-flight ops without a presentation) still parse.
- */
-const pendingOperationPresentationSchema = z
-  .object({
-    id: z.string(),
-    status: z.string(),
-    tool: z.string(),
-    title: z.string(),
-    amountCents: z.number().optional(),
-    // P3.5 installment preview: every value is SERVER-computed (the PWA only
-    // renders it), and amountCents stays the TOTAL of the purchase.
-    installmentsTotal: z.number().int().min(1).max(48).optional(),
-    installmentAmountsCents: z.array(z.number().int().min(0)).min(1).max(48).optional(),
-    firstStatementClosingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    firstStatementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    description: z.string().optional(),
-    expectedDescription: z.string().min(1).max(240).optional(),
-    transactionTargetId: z.string().min(1).max(128).optional(),
-    transactionAmountCents: z.number().int().min(0).optional(),
-    transactionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    transactionAccount: pendingOperationPresentationLabelSchema.optional(),
-    date: z.string().optional(),
-    account: pendingOperationPresentationLabelSchema.optional(),
-    // P3.3 internal transfer: origin/destination labels resolved server-side.
-    // No category exists for a transfer (neither income nor expense).
-    fromAccount: pendingOperationPresentationLabelSchema.optional(),
-    toAccount: pendingOperationPresentationLabelSchema.optional(),
-    category: pendingOperationPresentationLabelSchema.optional(),
-    categoryParent: pendingOperationPresentationLabelSchema.optional(),
-    // P3.6 statement payment: invoice label + authoritative amounts/due date.
-    // The PWA only renders them; it never recomputes the remaining balance.
-    statement: pendingOperationPresentationLabelSchema.optional(),
-    statementTotalCents: z.number().int().min(0).optional(),
-    statementPaidCents: z.number().int().min(0).optional(),
-    statementRemainingCents: z.number().int().min(0).optional(),
-    statementDueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    statementStatus: z.string().min(1).max(32).optional(),
-    // accounts.create display tuple (contrato packages/llm-contracts):
-    // nome + tipo + saldo inicial em vez da tupla transacional. Ausente em
-    // payloads legados — o card degrada para a forma enxuta.
-    // accounts.deactivate carrega o snapshot display-only balanceCents
-    // (saldo no momento da proposta) + account {id,label} resolvido
-    // server-side (gate do Confirm) — mesmo contrato.
-    // categories.create carrega categoryName/categoryKind + parent `category`
-    // {id,label} resolvido server-side (raiz sem parent segue acionável).
-    accountName: z.string().min(1).max(120).optional(),
-    accountKind: z.string().min(1).max(32).optional(),
-    initialBalanceCents: z.number().int().optional(),
-    balanceCents: z.number().int().optional(),
-    categoryName: z.string().min(1).max(120).optional(),
-    categoryKind: z.string().min(1).max(32).optional(),
-    expiresAt: z.string(),
-    warnings: z.array(z.string()),
-  })
-  .strict();
-
-export type PendingOperationPresentation = z.infer<typeof pendingOperationPresentationSchema>;
 
 /**
  * T3.3 (SPEC §15.1): browser-safe execution receipt. Strict allowlist with
@@ -194,24 +114,6 @@ function sanitizeMutationReceipt(value: unknown): PendingOperationReceipt | unde
   if (!value || typeof value !== "object") return undefined;
   const parsed = mutationReceiptSchema.safeParse(value);
   return parsed.success ? (parsed.data as PendingOperationReceipt) : undefined;
-}
-
-/**
- * HIGH3 (round 3): gateway-echoed authoritative context (tool + target id,
- * no authority material). Strict shape — anything else degrades to NO
- * context (callers fail closed on sensitive tools without context, never
- * accept a smuggled binding).
- */
-function sanitizeExpectedContext(value: unknown): DecisionExpectedContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const raw = value as Record<string, unknown>;
-  if (typeof raw.tool !== "string" || !raw.tool.trim()) return undefined;
-  if (raw.entityId !== undefined && (typeof raw.entityId !== "string" || !raw.entityId.trim())) {
-    return undefined;
-  }
-  return raw.entityId !== undefined
-    ? { tool: raw.tool.trim(), entityId: (raw.entityId as string).trim() }
-    : { tool: raw.tool.trim() };
 }
 
 /**
@@ -349,10 +251,6 @@ export function sanitizeSelfConfirmExecution(value: unknown): SelfConfirmExecuti
   return { operationId, tool, status, outcome };
 }
 
-const isAccountApprovalTool = (tool: string): boolean => tool.startsWith("accounts.");
-const isCategoryApprovalTool = (tool: string): boolean => tool.startsWith("categories.");
-const isStatementApprovalTool = (tool: string): boolean => tool === "cards.statement.pay";
-
 /** Closed approval-tool mapping; unknown tools never inherit a fallback entity type. */
 function approvalEntityType(tool: string): "transaction" | "account" | "category" | "statement" | undefined {
   switch (tool) {
@@ -389,370 +287,16 @@ export const PENDING_OPERATION_STATUS = [
 
 export type PendingOperationStatus = (typeof PENDING_OPERATION_STATUS)[number];
 
-type AgentTurnPendingOperationBase = Readonly<{
-  id: string;
-  operation: string;
-  summary?: string;
-  presentation?: PendingOperationPresentation;
-  /**
-   * HIGH3 (round 3): gateway-echoed authoritative context (tool + target
-   * id, no authority token). Binds the receipt instead of trusting the
-   * response alone. Optional: absent on legacy payloads (PWA degrades —
-   * sensitive tools fail closed without it).
-   */
-  expected?: DecisionExpectedContext;
-}>;
-
-export type AgentTurnPendingOperation =
-  | (AgentTurnPendingOperationBase & Readonly<{
-      status: "succeeded";
-      receipt: PendingOperationReceipt;
-    }>)
-  | (AgentTurnPendingOperationBase & Readonly<{
-      status: Exclude<PendingOperationStatus, "succeeded">;
-      receipt?: never;
-    }>);
-
-/**
- * P3 — exact proposal intent contract accepted from the OpenCode runtime.
- * The runtime records a display-only `summary` alongside the authoritative
- * fields; it is accepted at the boundary and DROPPED from the forwarded value
- * (the Agent broker contract is exactly tool/intentionId/normalizedArgs).
- * Anything else outside this shape is dropped (never forwarded to the broker).
- *
- * P3.2 adds `transactions.income.create` to the SAME closed contract; the API
- * already accepts it, so no capability or authority is added here.
- *
- * P3.3 adds `transactions.transfer.create` (internal transfer, no category).
- * The card is still rehydrated from the authoritative active list.
- * P3.4 adds `cards.purchase.create`: a 1x credit-card purchase. Its category
- * is optional (a card purchase may be classified later), so it carries its
- * own normalized-args schema; the closed tool set is otherwise identical.
- */
-const proposalArgsSchema = z
-  .object({
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    description: z.string().trim().min(1).max(240),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    accountId: z.string().uuid(),
-    categoryId: z.string().uuid(),
-  })
-  .strict();
-
-const cardPurchaseProposalArgsSchema = z
-  .object({
-    /** TOTAL of the purchase — never a per-parcel amount. */
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    description: z.string().trim().min(1).max(240),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    accountId: z.string().uuid(),
-    categoryId: z.string().uuid().optional(),
-    /** P3.5: optional parcel count (1–48). The API owns the split. */
-    installmentsTotal: z.number().int().min(1).max(48).optional(),
-  })
-  .strict()
-  .refine(
-    (value) => value.installmentsTotal === undefined || value.installmentsTotal <= value.amountCents,
-    { message: "amountCents must cover at least 1 cent per installment", path: ["installmentsTotal"] },
-  );
-
-const transferProposalArgsSchema = z
-  .object({
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    description: z.string().trim().min(1).max(240),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    fromAccountId: z.string().uuid(),
-    toAccountId: z.string().uuid(),
-  })
-  .strict()
-  .refine((value) => value.fromAccountId !== value.toAccountId, {
-    message: "fromAccountId and toAccountId must differ",
-  });
-
-const statementPaymentProposalArgsSchema = z
-  .object({
-    statementId: z.string().uuid(),
-    fromAccountId: z.string().uuid(),
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  })
-  .strict();
-
-const proposalIntentBase = {
-  intentionId: z.string().trim().min(1).max(128),
-  // Display-only metadata; never used to authorize or execute.
-  summary: z.string().trim().min(1).max(240).optional(),
-} as const;
-
-const expenseProposalIntentSchema = z
-  .object({
-    tool: z.literal("transactions.expense.create"),
-    ...proposalIntentBase,
-    normalizedArgs: proposalArgsSchema,
-  })
-  .strict();
-
-const incomeProposalIntentSchema = z
-  .object({
-    tool: z.literal("transactions.income.create"),
-    ...proposalIntentBase,
-    normalizedArgs: proposalArgsSchema,
-  })
-  .strict();
-
-const cardPurchaseProposalIntentSchema = z
-  .object({
-    tool: z.literal("cards.purchase.create"),
-    ...proposalIntentBase,
-    normalizedArgs: cardPurchaseProposalArgsSchema,
-  })
-  .strict();
-
-const transferProposalIntentSchema = z
-  .object({
-    tool: z.literal("transactions.transfer.create"),
-    intentionId: z.string().trim().min(1).max(128),
-    summary: z.string().trim().min(1).max(240).optional(),
-    normalizedArgs: transferProposalArgsSchema,
-  })
-  .strict();
-
-const statementPaymentProposalIntentSchema = z
-  .object({
-    tool: z.literal("cards.statement.pay"),
-    ...proposalIntentBase,
-    normalizedArgs: statementPaymentProposalArgsSchema,
-  })
-  .strict();
-
-const accountCreateProposalArgsSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    kind: z.enum(["bank", "cash"]),
-    initialBalanceCents: z.number().int().min(-1_000_000_000_000).max(1_000_000_000_000),
-  })
-  .strict();
-
-const categoryCreateProposalArgsSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    kind: z.enum(["expense", "income"]),
-    parentId: z.string().uuid().optional(),
-  })
-  .strict();
-
-const accountCreateProposalIntentSchema = z
-  .object({
-    tool: z.literal("accounts.create"),
-    ...proposalIntentBase,
-    normalizedArgs: accountCreateProposalArgsSchema,
-  })
-  .strict();
-
-const categoryCreateProposalIntentSchema = z
-  .object({
-    tool: z.literal("categories.create"),
-    ...proposalIntentBase,
-    normalizedArgs: categoryCreateProposalArgsSchema,
-  })
-  .strict();
-
-const transactionUpdateProposalArgsSchema = z
-  .object({
-    transactionId: z.string().uuid(),
-    description: z.string().trim().min(1).max(240),
-    expectedDescription: z
-      .string()
-      .min(1)
-      .max(240)
-      .refine((value) => value.trim().length > 0, "expectedDescription must be non-empty"),
-  })
-  .strict();
-
-const accountUpdateProposalArgsSchema = z
-  .object({
-    accountId: z.string().uuid(),
-    name: z.string().trim().min(1).max(120),
-    expectedName: z.string().trim().min(1).max(120),
-  })
-  .strict();
-
-const accountDeactivateProposalArgsSchema = z
-  .object({
-    accountId: z.string().uuid(),
-    accountName: z.string().trim().min(1).max(120).optional(),
-  })
-  .strict();
-
-const categoryUpdateProposalArgsSchema = z
-  .object({
-    categoryId: z.string().uuid(),
-    name: z.string().trim().min(1).max(120),
-    expectedName: z.string().trim().min(1).max(120),
-  })
-  .strict();
-
-const categoryDeactivateProposalArgsSchema = z
-  .object({
-    categoryId: z.string().uuid(),
-    expectedName: z.string().trim().min(1).max(120),
-  })
-  .strict();
-
-const transactionUpdateProposalIntentSchema = z
-  .object({
-    tool: z.literal("transactions.update"),
-    ...proposalIntentBase,
-    normalizedArgs: transactionUpdateProposalArgsSchema,
-  })
-  .strict();
-
-const accountUpdateProposalIntentSchema = z
-  .object({
-    tool: z.literal("accounts.update"),
-    ...proposalIntentBase,
-    normalizedArgs: accountUpdateProposalArgsSchema,
-  })
-  .strict();
-
-const accountDeactivateProposalIntentSchema = z
-  .object({
-    tool: z.literal("accounts.deactivate"),
-    ...proposalIntentBase,
-    normalizedArgs: accountDeactivateProposalArgsSchema,
-  })
-  .strict();
-
-const categoryUpdateProposalIntentSchema = z
-  .object({
-    tool: z.literal("categories.update"),
-    ...proposalIntentBase,
-    normalizedArgs: categoryUpdateProposalArgsSchema,
-  })
-  .strict();
-
-const categoryDeactivateProposalIntentSchema = z
-  .object({
-    tool: z.literal("categories.deactivate"),
-    ...proposalIntentBase,
-    normalizedArgs: categoryDeactivateProposalArgsSchema,
-  })
-  .strict();
-
-const payableCreateProposalArgsSchema = z
-  .object({
-    accountId: z.string().uuid(),
-    description: z.string().trim().min(1).max(240),
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    categoryId: z.string().uuid().optional(),
-  })
-  .strict();
-
-const payablePayProposalArgsSchema = z
-  .object({
-    payableId: z.string().uuid(),
-    description: z.string().trim().min(1).max(240),
-    amountCents: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    accountId: z.string().uuid(),
-    paidDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  })
-  .strict();
-
-const payableCreateProposalIntentSchema = z
-  .object({
-    tool: z.literal("payables.create"),
-    ...proposalIntentBase,
-    normalizedArgs: payableCreateProposalArgsSchema,
-  })
-  .strict();
-
-const payablePayProposalIntentSchema = z
-  .object({
-    tool: z.literal("payables.pay"),
-    ...proposalIntentBase,
-    normalizedArgs: payablePayProposalArgsSchema,
-  })
-  .strict();
-
-const proposalIntentSchema = z.discriminatedUnion("tool", [
-  expenseProposalIntentSchema,
-  incomeProposalIntentSchema,
-  cardPurchaseProposalIntentSchema,
-  transferProposalIntentSchema,
-  statementPaymentProposalIntentSchema,
-  accountCreateProposalIntentSchema,
-  categoryCreateProposalIntentSchema,
-  transactionUpdateProposalIntentSchema,
-  accountUpdateProposalIntentSchema,
-  accountDeactivateProposalIntentSchema,
-  categoryUpdateProposalIntentSchema,
-  categoryDeactivateProposalIntentSchema,
-  payableCreateProposalIntentSchema,
-  payablePayProposalIntentSchema,
-]);
-
-export type ProposalArgs = z.infer<typeof proposalArgsSchema>;
-export type CardPurchaseProposalArgs = z.infer<typeof cardPurchaseProposalArgsSchema>;
-export type TransferProposalArgs = z.infer<typeof transferProposalArgsSchema>;
-export type StatementPaymentProposalArgs = z.infer<typeof statementPaymentProposalArgsSchema>;
-export type AccountCreateProposalArgs = z.infer<typeof accountCreateProposalArgsSchema>;
-export type CategoryCreateProposalArgs = z.infer<typeof categoryCreateProposalArgsSchema>;
-export type TransactionUpdateProposalArgs = z.infer<typeof transactionUpdateProposalArgsSchema>;
-export type AccountUpdateProposalArgs = z.infer<typeof accountUpdateProposalArgsSchema>;
-export type AccountDeactivateProposalArgs = z.infer<typeof accountDeactivateProposalArgsSchema>;
-export type CategoryUpdateProposalArgs = z.infer<typeof categoryUpdateProposalArgsSchema>;
-export type CategoryDeactivateProposalArgs = z.infer<typeof categoryDeactivateProposalArgsSchema>;
-export type PayableCreateProposalArgs = z.infer<typeof payableCreateProposalArgsSchema>;
-export type PayablePayProposalArgs = z.infer<typeof payablePayProposalArgsSchema>;
-export type ProposalIntent =
-  | { tool: "transactions.expense.create"; intentionId: string; normalizedArgs: ProposalArgs }
-  | { tool: "transactions.income.create"; intentionId: string; normalizedArgs: ProposalArgs }
-  | { tool: "cards.purchase.create"; intentionId: string; normalizedArgs: CardPurchaseProposalArgs }
-  | { tool: "transactions.transfer.create"; intentionId: string; normalizedArgs: TransferProposalArgs }
-  | { tool: "cards.statement.pay"; intentionId: string; normalizedArgs: StatementPaymentProposalArgs }
-  | { tool: "accounts.create"; intentionId: string; normalizedArgs: AccountCreateProposalArgs }
-  | { tool: "categories.create"; intentionId: string; normalizedArgs: CategoryCreateProposalArgs }
-  | { tool: "transactions.update"; intentionId: string; normalizedArgs: TransactionUpdateProposalArgs }
-  | { tool: "accounts.update"; intentionId: string; normalizedArgs: AccountUpdateProposalArgs }
-  | { tool: "accounts.deactivate"; intentionId: string; normalizedArgs: AccountDeactivateProposalArgs }
-  | { tool: "categories.update"; intentionId: string; normalizedArgs: CategoryUpdateProposalArgs }
-  | { tool: "categories.deactivate"; intentionId: string; normalizedArgs: CategoryDeactivateProposalArgs }
-  | { tool: "payables.create"; intentionId: string; normalizedArgs: PayableCreateProposalArgs }
-  | { tool: "payables.pay"; intentionId: string; normalizedArgs: PayablePayProposalArgs };
-export type ExpenseProposalIntent = Extract<ProposalIntent, { tool: "transactions.expense.create" }>;
-export type IncomeProposalIntent = Extract<ProposalIntent, { tool: "transactions.income.create" }>;
-export type TransferProposalIntent = Extract<ProposalIntent, { tool: "transactions.transfer.create" }>;
-
-export function sanitizeProposalIntent(value: unknown): ProposalIntent | undefined {
-  const parsed = proposalIntentSchema.safeParse(value);
-  if (!parsed.success) return undefined;
-  // Strip the display-only `summary`; the forwarded broker contract is exactly
-  // tool + intentionId + normalizedArgs.
-  const { tool, intentionId, normalizedArgs } = parsed.data;
-  return { tool, intentionId, normalizedArgs } as ProposalIntent;
-}
-
 export type AgentTurn = {
   turnId: string;
   status: string;
   attempts?: number;
   output?: string;
   memorized?: string[];
-  pendingOperation?: AgentTurnPendingOperation;
   /**
-   * P3 — proposal INTENT from the OpenCode runtime. It authorizes NOTHING: the
-   * PWA sends it to the authenticated Agent broker, which mints the propose
-   * capability (A4) and asks the API to persist the pending operation. The
-   * card is rehydrated from the authoritative active list, never from this
-   * payload. Strictly sanitized at the boundary.
-   */
-  proposal?: ProposalIntent;
-  /**
-   * ADR-033 S2: with self-confirm enabled the gateway executes in the same
-   * turn and returns this READ-ONLY terminal result INSTEAD of an actionable
-   * proposal. When the agent is unsure it returns text only (no proposal and
-   * no execution). Strictly sanitized; never carries attestation/hash.
+   * ADR-033: o agente confirma e executa direto; a resposta traz apenas este
+   * resultado terminal e somente leitura. Na dúvida, o agente responde em
+   * texto, sem execução. Nunca carrega atestação/hash.
    */
   execution?: SelfConfirmExecution;
   /**
@@ -784,7 +328,7 @@ export type AgentTurn = {
  * and stale states belong to T3.3 and are intentionally absent here.
  */
 export const PENDING_OPERATION_STATUS_LABELS: Readonly<Record<PendingOperationStatus, string>> = {
-  proposed: "aguardando aprovação",
+  proposed: "em andamento",
   confirmed: "confirmada — processando operação…",
   executing: "processando operação…",
   succeeded: "concluída",
@@ -797,7 +341,7 @@ export function describePendingOperationStatus(status: string): string {
   return (PENDING_OPERATION_STATUS_LABELS as Readonly<Record<string, string>>)[status] ?? status;
 }
 
-/** pt-BR currency for the card and the confirm button (cents → "R$ 850,00"). */
+/** pt-BR currency for the result card (cents → "R$ 850,00"). */
 export function formatCentsToBRL(cents: number): string {
   return `R$ ${(cents / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
 }
@@ -813,215 +357,6 @@ export function formatDateToBR(isoDate: string): string {
  * turn. A presentation carrying single-use approval material (or any unknown
  * dropped — the operation itself still surfaces in its legacy shape.
  */
-const executionOutcomeUnknown = (): Error & { code: string } =>
-  Object.assign(
-    new Error("O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão."),
-    { code: "agent.execution_outcome_unknown" },
-  );
-
-function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const raw = value as Record<string, unknown>;
-  // A server-asserted success may reach chat output/reconciliation only with
-  // the canonical receipt linked to both the pending operation and the
-  // persisted entity (transaction for transaction tools, account for
-  // accounts.create/accounts.deactivate/accounts.update/categories.deactivate).
-  //
-  // HIGH3 (round 4): card-known context (presentation) precedes gateway
-  // echo — and a conflict between them is denied, never resolved by
-  // preferring echo. Echo+receipt agreement alone is never the sole
-  // proof: without any card-known or plan-derived context, sensitive
-  // tools fail closed.
-  if (raw.status === "succeeded") {
-    const candidateId = typeof raw.id === "string" ? raw.id : "";
-    const candidateReceipt = sanitizeMutationReceipt(raw.receipt);
-    const entityId = typeof candidateReceipt?.entity?.id === "string" ? candidateReceipt.entity.id.trim() : "";
-    const presentationTool =
-      raw.presentation && typeof raw.presentation === "object"
-        ? (raw.presentation as { tool?: unknown }).tool
-        : undefined;
-    const presentationAccountId =
-      raw.presentation && typeof raw.presentation === "object"
-        ? (raw.presentation as { account?: { id?: unknown } }).account?.id
-        : undefined;
-    const presentationStatementId =
-      raw.presentation && typeof raw.presentation === "object"
-        ? (raw.presentation as { statement?: { id?: unknown } }).statement?.id
-        : undefined;
-    const echoExpected = sanitizeExpectedContext((raw as { expected?: unknown }).expected);
-    // HIGH3 (round 4): card-known context (presentation) precedes gateway
-    // echo — and a conflict between them is denied, never resolved by
-    // preferring echo. Echo+receipt agreement alone is never the sole
-    // proof: without any card-known or plan-derived context, sensitive
-    // tools fail closed.
-    let contextTool: string | undefined;
-    let contextEntityId: string | undefined;
-    if (
-      typeof presentationTool === "string" &&
-      APPROVAL_TOOLS.includes(presentationTool)
-    ) {
-      // Sensitive account targets bind ONLY with a resolved pre-existing
-      // target id (presentation.account.id). Without it the card proves no
-      // target — no context, never an arbitrary entity (fail-closed below).
-      if (isCategoryApprovalTool(presentationTool)) {
-        const presentationCategoryId =
-          raw.presentation && typeof raw.presentation === "object"
-            ? (raw.presentation as { category?: { id?: unknown } }).category?.id
-            : undefined;
-        // Sensitive category tools (categories.update) bind the RENAMED
-        // target id. `categories.create` does NOT: its `category` label is
-        // the PARENT, while the receipt carries the newly created category
-        // (minted at execution) — kind-only policy, never a false failure.
-        if (
-          (presentationTool === "categories.update" || presentationTool === "categories.deactivate") &&
-          typeof presentationCategoryId === "string" &&
-          presentationCategoryId.trim()
-        ) {
-          contextTool = presentationTool;
-          contextEntityId = presentationCategoryId.trim();
-        } else {
-          contextTool = presentationTool;
-        }
-      } else if (!isAccountApprovalTool(presentationTool)) {
-        contextTool = presentationTool;
-        if (presentationTool === "transactions.update") {
-          const transactionTargetId =
-            raw.presentation && typeof raw.presentation === "object"
-              ? (raw.presentation as { transactionTargetId?: unknown }).transactionTargetId
-              : undefined;
-          if (typeof transactionTargetId === "string" && transactionTargetId.trim()) {
-            contextEntityId = transactionTargetId.trim();
-          }
-        }
-        if (isStatementApprovalTool(presentationTool) && typeof presentationStatementId === "string" && presentationStatementId.trim()) {
-          contextEntityId = presentationStatementId.trim();
-        }
-      } else if (
-        typeof presentationAccountId === "string" &&
-        presentationAccountId.trim()
-      ) {
-        contextTool = presentationTool;
-        contextEntityId = presentationAccountId.trim();
-      }
-      if (echoExpected !== undefined && echoExpected.tool !== presentationTool) {
-        throw executionOutcomeUnknown();
-      }
-      // Card and echo name the same tool but disagree on the target: two
-      // authorizing contexts in conflict — deny, never prefer one of them.
-      if (
-        contextEntityId !== undefined &&
-        echoExpected?.entityId !== undefined &&
-        echoExpected.entityId !== contextEntityId
-      ) {
-        throw executionOutcomeUnknown();
-      }
-    } else if (echoExpected !== undefined) {
-      contextTool = echoExpected.tool;
-      contextEntityId = echoExpected.entityId;
-    }
-    const kind = candidateReceipt?.mutationKind;
-    if (
-      !candidateId.trim() ||
-      !candidateReceipt ||
-      typeof kind !== "string" ||
-      !APPROVAL_TOOLS.includes(kind) ||
-      candidateReceipt.operationId !== candidateId ||
-      !entityId
-    ) {
-      throw executionOutcomeUnknown();
-    }
-    if (contextTool !== undefined) {
-      if (kind !== contextTool) throw executionOutcomeUnknown();
-      // entity.type/kind coherence holds in EVERY path: account tools bind
-      // accounts, categories.create binds categories, every other approval
-      // tool binds transactions.
-      const expectsAccount =
-        kind === "accounts.create" || kind === "accounts.update" || kind === "accounts.deactivate";
-      const expectsCategory = kind === "categories.create" || kind === "categories.update" || kind === "categories.deactivate";
-      const expectsStatement = isStatementApprovalTool(kind);
-      if (
-        (expectsAccount && candidateReceipt?.entity?.type !== "account") ||
-        (expectsCategory && candidateReceipt?.entity?.type !== "category") ||
-        (expectsStatement && candidateReceipt?.entity?.type !== "statement") ||
-        (!expectsAccount && !expectsCategory && !expectsStatement && candidateReceipt?.entity?.type !== "transaction")
-      ) {
-        throw executionOutcomeUnknown();
-      }
-      if (contextEntityId !== undefined) {
-        const expectedType = approvalEntityType(kind);
-        if (candidateReceipt.entity?.id !== contextEntityId || candidateReceipt.entity?.type !== expectedType) {
-          throw executionOutcomeUnknown();
-        }
-      }
-      // Sensitive tools always bind a pre-existing target: a bare {tool}
-      // context (no entity id from any context) never proves one.
-      if (
-        (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate" || isStatementApprovalTool(kind)) &&
-        contextEntityId === undefined
-      ) {
-        throw executionOutcomeUnknown();
-      }
-    } else {
-      // No context: sensitive account/statement targets are never accepted blind.
-      if (kind === "transactions.update" || kind === "accounts.update" || kind === "accounts.deactivate" || kind === "categories.update" || kind === "categories.deactivate" || isStatementApprovalTool(kind)) {
-        throw executionOutcomeUnknown();
-      }
-      // accounts-card-pwa-round2: a entidade vinculada respeita o kind — conta
-      // só em accounts.create, categoria só em categories.create, transação
-      // nos demais (preserva o gate estrito de transação e admite os
-      // sucessos de criação). `categories.update` nunca chega aqui: o
-      // guard acima já o recusou (alvo sensível sem contexto).
-      const entityMatchesKind =
-        kind === "accounts.create"
-          ? candidateReceipt?.entity?.type === "account"
-          : kind === "categories.create"
-            ? candidateReceipt?.entity?.type === "category"
-            : isStatementApprovalTool(kind)
-              ? candidateReceipt?.entity?.type === "statement"
-              : candidateReceipt?.entity?.type === "transaction";
-      if (!entityMatchesKind) throw executionOutcomeUnknown();
-    }
-    // The turn operation itself is authoritative when it names an approval
-    // tool (mutation turns): the receipt kind must equal it exactly.
-    if (
-      typeof raw.operation === "string" &&
-      APPROVAL_TOOLS.includes(raw.operation) &&
-      kind !== raw.operation
-    ) {
-      throw executionOutcomeUnknown();
-    }
-  }
-  if (typeof raw.id !== "string" || !raw.id.trim() || typeof raw.operation !== "string") return undefined;
-  if (!(PENDING_OPERATION_STATUS as readonly string[]).includes(String(raw.status))) return undefined;
-  const id = raw.id;
-  const status = raw.status as PendingOperationStatus;
-  const operation = raw.operation;
-  const summary = typeof raw.summary === "string" ? raw.summary : undefined;
-  const parsedPresentation =
-    raw.presentation && typeof raw.presentation === "object"
-      ? pendingOperationPresentationSchema.safeParse(raw.presentation)
-      : null;
-  const receipt = sanitizeMutationReceipt(raw.receipt);
-  if (status !== "succeeded" && raw.receipt !== undefined) {
-    const err = new Error("A resposta da decisão não corresponde a um estado sem execução financeira.") as Error & { code?: string };
-    err.code = "agent.invalid_decision_result";
-    throw err;
-  }
-  const expected = sanitizeExpectedContext((raw as { expected?: unknown }).expected);
-  const safeFields = {
-    id,
-    operation,
-    ...(summary !== undefined ? { summary } : {}),
-    ...(parsedPresentation && parsedPresentation.success ? { presentation: parsedPresentation.data } : {}),
-    ...(expected !== undefined ? { expected } : {}),
-  };
-  if (status === "succeeded") {
-    if (!receipt) throw executionOutcomeUnknown();
-    return { ...safeFields, status, receipt };
-  }
-  return { ...safeFields, status };
-}
-
 /**
  * SPEC §7.7/§7.7.1 — stable per-turn message identity (PWA-owned).
  *
@@ -1029,21 +364,12 @@ function sanitizePendingOperation(value: unknown): AgentTurn["pendingOperation"]
  * composition. Retries of the same send MUST reuse it (pass
  * `{ messageId }` back into `sendAgentMessage`); the id is sent as the
  * Agent's `intentionId`, so a lost HTTP response can never produce a second
- * proposal. Never regenerate on retry; a new message composes a new id.
+ * operation. Never regenerate on retry; a new message composes a new id.
  */
 export type PendingChatSend = Readonly<{
   messageId: string;
   content: string;
   createdAt: string;
-  /**
-   * P3 recovery: the runtime's expense proposal intent that still needs to be
-   * handed to the Agent broker. It survives a failed/lost broker call in this
-   * SAME retry anchor (never a second store) so a reload can re-send the
-   * original intent under the same `intentionId`. The broker derives the
-   * idempotency key from it, so replaying this payload can only return the
-   * existing operation — never a second launch.
-   */
-  proposal?: ProposalIntent;
   /**
    * Older retry records predate the versioned text-send shape; keep them
    * non-retryable because their original payload cannot be reconstructed.
@@ -1118,7 +444,6 @@ const CHAT_SEND_ANCHOR_VERSION = 1;
  */
 export function savePendingChatSend(workspaceId: string, send: PendingChatSend, actorId?: string | null): void {
   try {
-    const proposal = send.proposal ? sanitizeProposalIntent(send.proposal) : undefined;
     sessionStorage.setItem(
       pendingSendKey(workspaceId, actorId),
       JSON.stringify({
@@ -1126,7 +451,6 @@ export function savePendingChatSend(workspaceId: string, send: PendingChatSend, 
         messageId: send.messageId,
         content: send.content,
         createdAt: send.createdAt,
-        ...(proposal ? { proposal } : {}),
       }),
     );
   } catch {
@@ -1150,7 +474,6 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
       createdAt?: unknown;
       anchorVersion?: unknown;
       attachments?: unknown;
-      proposal?: unknown;
     };
     if (typeof parsed.messageId !== "string" || !parsed.messageId || typeof parsed.content !== "string") return null;
     const base = {
@@ -1158,17 +481,13 @@ export function loadPendingChatSend(workspaceId: string, actorId?: string | null
       content: parsed.content,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date(0).toISOString(),
     };
-    // P3: the intent is revalidated on every load. An invalid value is
-    // dropped (no broker call), never partially rehydrated.
-    const proposal = sanitizeProposalIntent(parsed.proposal);
-    const withProposal = proposal ? { proposal } : {};
     if (
       parsed.anchorVersion !== CHAT_SEND_ANCHOR_VERSION ||
       Object.prototype.hasOwnProperty.call(parsed, "attachments")
     ) {
-      return { ...base, ...withProposal, legacyAnchor: true };
+      return { ...base, legacyAnchor: true };
     }
-    return { ...base, ...withProposal };
+    return base;
   } catch {
     return null;
   }
@@ -1309,36 +628,6 @@ export function clearAllPendingChatSends(): void {
     // Best effort.
   }
 }
-
-const pendingDecisionSchema = z.object({
-  operationId: z.string(),
-  status: z.enum(["proposed", "succeeded", "failed", "cancelled", "expired"]),
-  retryable: z.boolean().optional(),
-  failureCode: z.literal('in_use').optional(),
-  // Raw receipt is parsed separately: the strict schema drops any payload
-  // carrying single-use approval material or unknown keys WHOLESALE (INV-05, T3.3).
-  receipt: z.unknown().optional(),
-}).strict();
-
-type PendingOperationDecisionStatus = z.infer<typeof pendingDecisionSchema>["status"];
-
-/** Safe result of an approval decision. Attestations never cross the browser boundary. */
-export type PendingOperationDecision =
-  | {
-      operationId: string;
-      status: "succeeded";
-      retryable?: boolean;
-      failureCode?: 'in_use';
-      /** A success is only actionable when it carries its canonical receipt. */
-      receipt: PendingOperationReceipt;
-    }
-  | {
-      operationId: string;
-      status: Exclude<PendingOperationDecisionStatus, "succeeded">;
-      retryable?: boolean;
-      failureCode?: 'in_use';
-      receipt?: never;
-    };
 
 /**
  * Error shapes do caminho do Agent. O Agent emite `{ code, message }`
@@ -1483,8 +772,7 @@ export async function sendAgentMessage(
   // SPEC §7.7: the send identity is fixed ONCE here; retries pass the same
   // messageId back and the pending record keeps it across reloads.
   const messageId = opts?.messageId && opts.messageId.trim() ? opts.messageId.trim() : createChatMessageId();
-  // P3: the same timestamp survives the post-turn rewrite below, so a proposal
-  // anchor keeps the original send ordering for the retry reconciler.
+  // Mesma data/hora sobrevive ao turno para ordenação do retry.
   const anchorCreatedAt = new Date().toISOString();
   savePendingChatSend(workspaceId, {
     messageId,
@@ -1526,235 +814,21 @@ export async function sendAgentMessage(
     else if (response.status === 403) err.code = "auth.workspace_forbidden";
     throw err;
   }
-  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown; proposal?: unknown; execution?: unknown };
-  const pendingOperation = sanitizePendingOperation(data.pendingOperation);
+  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; undoProposal?: unknown; execution?: unknown };
   const undoProposal = sanitizeUndoProposal(data.undoProposal as AgentTurn["undoProposal"]);
-  const proposal = sanitizeProposalIntent(data.proposal);
   const execution = sanitizeSelfConfirmExecution(data.execution);
   // The turn landed: the in-flight record is no longer needed. On failure
   // (including an unlinked succeeded receipt) it stays, so retry reuses the
   // same idempotent messageId.
-  // P2-1 (retry pós-reload): um 200 sem output E sem decisão estruturada
-  // (pendingOperation/undoProposal) NÃO é sucesso — é falha retentável, então
-  // a âncora/storage SOBREVIVE para o retry reusar a MESMA identidade §7.7
-  // mesmo após reload/remount. Só sucesso real limpa.
-  // P3: a turn carrying a proposal intent is NOT finished until the broker
-  // accepted it. The anchor keeps the intent here; TedChat clears it only
-  // after the broker responds. A reload (or a lost broker response) can then
-  // replay the EXACT same intentionId through the existing idempotent path.
-  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal || proposal || execution);
-  if (hasRealResult) {
-    if (proposal) {
-      savePendingChatSend(workspaceId, {
-        messageId,
-        content,
-        createdAt: anchorCreatedAt,
-            proposal,
-      });
-    } else {
-      clearPendingChatSend(workspaceId);
-    }
-  }
+  const hasRealResult = Boolean(data.output?.trim() || undoProposal || execution);
+  if (hasRealResult) clearPendingChatSend(workspaceId);
   return {
     turnId: data.turnId ?? data.intentionId ?? `turn-${Date.now()}`,
     status: data.status ?? "completed",
     output: data.output,
     ...(Array.isArray(data.memorized) ? { memorized: data.memorized.filter((m): m is string => typeof m === "string") } : {}),
-    ...(pendingOperation ? { pendingOperation } : {}),
     ...(undoProposal ? { undoProposal } : {}),
-    ...(proposal ? { proposal } : {}),
     ...(execution ? { execution } : {}),
-  };
-}
-
-/**
- * P3 — sends the OpenCode runtime's proposal INTENT (expense or income) to the
- * authenticated Agent broker. The Agent mints the propose-only delegated
- * capability (A4) and the API persists the Pending V2 operation. This call can
- * NEVER confirm or execute: the user still decides on the card.
- *
- * The stable `intentionId` is the backend idempotency seed, so a retry of the
- * same turn replays the SAME proposal (existing:true) instead of duplicating.
- */
-export async function proposePendingOperation(
-  workspaceId: string,
-  intent: ProposalIntent,
-  opts?: { signal?: AbortSignal },
-): Promise<{ id: string; existing: boolean }> {
-  const safe = sanitizeProposalIntent(intent);
-  if (!safe) {
-    const err = new Error("A proposta recebida é inválida.") as Error & { code?: string };
-    err.code = "agent.invalid_proposal";
-    throw err;
-  }
-  const baseUrl = agentBaseUrl();
-  const response = await fetchWithAgentAuth(
-    workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/pending-operations/propose`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json", "X-Workspace-Id": workspaceId },
-      body: JSON.stringify(safe),
-      ...(opts?.signal ? { signal: opts.signal } : {}),
-    },
-  );
-  const data = (await parseJson<unknown>(response)) as { id?: unknown; existing?: unknown } | null;
-  if (!data || typeof data.id !== "string" || data.id.length === 0) {
-    const err = new Error("Não foi possível preparar a proposta.") as Error & { code?: string };
-    err.code = "agent.proposal_failed";
-    throw err;
-  }
-  return { id: data.id, existing: data.existing === true };
-}
-
-/** @deprecated P3.1 name — use `proposePendingOperation` (same broker route). */
-export const proposePendingExpense = proposePendingOperation;
-
-/**
- * Sends a user decision to the authenticated Agent. The Agent, not the
- * browser, owns V2 confirmation, credential consumption and execution.
- *
- * HIGH3: `expected` carries the authoritative card context (ORIGINAL tool
- * + account target id from the presentation that authorized the tap).
- * A receipt for another tool/entity with the same pending id fails
- * closed. Optional: without it the approval-kind + linkage checks still
- * apply.
- */
-export async function decidePendingOperation(
-  workspaceId: string,
-  operationId: string,
-  decision: "confirm" | "cancel" | "retry",
-  expected?: DecisionExpectedContext,
-): Promise<PendingOperationDecision> {
-  const baseUrl = agentBaseUrl();
-  const requestId = crypto.randomUUID();
-  const response = await fetchWithAgentAuth(
-    workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/pending-operations/${encodeURIComponent(operationId)}/decision`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json", "X-Workspace-Id": workspaceId },
-      body: JSON.stringify({ decision, requestId }),
-    },
-  );
-  let rawDecision: unknown;
-  try {
-    rawDecision = await parseJson<unknown>(response);
-  } catch (parseErr) {
-    // Resposta de erro (!ok) mantém o fluxo original do parseJson (mensagem
-    // + code do Agent) — só corpo 2xx indecodificável (vazio/truncado) é
-    // outcome NÃO verificado: a decisão pode já ter executado.
-    if (!response.ok) throw parseErr;
-    const err = new Error(
-      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
-    ) as Error & { code?: string };
-    err.code = "agent.execution_outcome_unknown";
-    throw err;
-  }
-  // P2-2: falhas de parsing/validação da resposta de decisão são resultado
-  // NÃO verificado (ex.: `succeeded` com campo extra rejeitado pelo
-  // `.strict()`). Sem receipt canônico vinculado, a decisão pode já ter
-  // executado — o card trava como unverified (lock + reconciliação
-  // obrigatória), nunca com botões de decisão. Nunca `ZodError` cru.
-  const decisionResult = pendingDecisionSchema.safeParse(rawDecision);
-  if (!decisionResult.success) {
-    const err = new Error(
-      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
-    ) as Error & { code?: string };
-    err.code = "agent.execution_outcome_unknown";
-    throw err;
-  }
-  const parsed = decisionResult.data;
-  const receipt = sanitizeMutationReceipt(parsed.receipt);
-  const safe = {
-    operationId: parsed.operationId,
-    status: parsed.status,
-    ...(parsed.retryable !== undefined ? { retryable: parsed.retryable } : {}),
-    ...(parsed.status === 'failed' && parsed.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
-  };
-  if (safe.operationId !== operationId) {
-    const err = new Error(
-      "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
-    ) as Error & { code?: string };
-    err.code = "agent.execution_outcome_unknown";
-    throw err;
-  }
-  // Fail-closed succeeded: the API+Agent contract guarantees a successful
-  // execute carries the pending ID + nested succeeded execution + canonical
-  // receipt (receipt.operationId === pending ID, entity {type:'transaction' |
-  // 'account' | 'category', id: persistedId} com o tipo vinculado ao kind:
-  // conta só em accounts.create/accounts.deactivate/accounts.update, categoria
-  // só em categories.create, transação nos demais). A succeeded decision without that receipt
-  // cannot be reconciled, so it must reject — never resolve as success. Other
-  // statuses (cancelled/failed/proposed/expired) carry no receipt by contract.
-  //
-  // HIGH3 (round 3): approval-path receipts always carry approval-tool
-  // kinds — a normal-write receipt with the same pending id is a swapped
-  // result, never a success. Rename/deactivate WITHOUT the card `expected`
-  // context fail closed (sensitive target, no proof); with it, the kind
-  // must equal the ORIGINAL tool and the entity must equal the ORIGINAL
-  // target id. `accounts.create`/`categories.create` keep the kind-only
-  // policy (entity minted at execution — never blocks honest creation).
-  if (safe.status === "succeeded") {
-    const entityId = typeof receipt?.entity?.id === "string" ? receipt.entity.id.trim() : "";
-    const kind = receipt?.mutationKind;
-    const entityMatchesKind = receipt?.entity?.type === approvalEntityType(kind ?? "");
-    if (
-      !receipt ||
-      typeof kind !== "string" ||
-      !APPROVAL_TOOLS.includes(kind) ||
-      receipt.operationId !== operationId ||
-      !entityMatchesKind ||
-      !entityId
-    ) {
-      const err = new Error(
-        "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
-      ) as Error & { code?: string };
-      err.code = "agent.execution_outcome_unknown";
-      throw err;
-    }
-    if (
-        (expected === undefined &&
-        (kind === "transactions.update" || kind === "accounts.update" ||
-          kind === "accounts.deactivate" ||
-          kind === "categories.update" || kind === "categories.deactivate" ||
-          kind === "cards.statement.pay")) ||
-      ((kind === "transactions.update" || kind === "accounts.update" ||
-        kind === "accounts.deactivate" ||
-        kind === "categories.update" || kind === "categories.deactivate" ||
-        kind === "cards.statement.pay") &&
-        (typeof expected?.entityId !== "string" || !expected.entityId.trim())) ||
-      (expected?.tool !== undefined && kind !== expected.tool) ||
-      (expected?.entityId !== undefined &&
-        (receipt.entity?.id !== expected.entityId || receipt.entity?.type !== approvalEntityType(kind)))
-    ) {
-      const err = new Error(
-        "O resultado desta operação ainda não pôde ser verificado. Atualize o estado antes de tomar outra decisão.",
-      ) as Error & { code?: string };
-      err.code = "agent.execution_outcome_unknown";
-      throw err;
-    }
-    return {
-      operationId: safe.operationId,
-      status: "succeeded",
-      ...(safe.retryable !== undefined ? { retryable: safe.retryable } : {}),
-      receipt,
-    };
-  }
-  if (parsed.receipt !== undefined) {
-    const err = new Error(
-      "A resposta da decisão não corresponde a um estado sem execução financeira.",
-    ) as Error & { code?: string };
-    err.code = "agent.invalid_decision_result";
-    throw err;
-  }
-  return {
-    operationId: safe.operationId,
-    status: safe.status,
-    ...(safe.retryable !== undefined ? { retryable: safe.retryable } : {}),
-    ...(safe.status === 'failed' && parsed.failureCode === 'in_use' ? { failureCode: 'in_use' as const } : {}),
   };
 }
 
@@ -1989,86 +1063,6 @@ export async function fetchAgentHistory(workspaceId: string): Promise<AgentMessa
   }
   const json = await response.json();
   return historySchema.parse(json).items;
-}
-
-/**
- * T5.3 (H-14, SPEC §22): lean active pending-operation projection relayed
- * by the Agent (which delegates to the authoritative API). Declared
- * locally with a strict allowlist — the client bundle budget forbids
- * importing the contracts zod entry. ANY unknown key (in particular
- * single-use approval material/authority material) fails the parse and the WHOLE payload is
- * discarded: the browser only ever reflects display data, never decides.
- * FIX-P1: optional canonical `presentation` (SPEC §16) derived server-side
- * from the hash-bound record. Present only when browser-safe; absent on
- * legacy payloads (card degrades to the lean shape).
- */
-export type ActivePendingOperation = Readonly<{
-  id: string;
-  status: string;
-  tool: string;
-  createdAt: string;
-  expiresAt: string;
-  amountCents?: number;
-  description?: string;
-  date?: string;
-  accountId?: string;
-  categoryId?: string;
-  /** P3.6 statement payment: invoice + payer ids carried by the relay. */
-  statementId?: string;
-  fromAccountId?: string;
-  supersedes?: string;
-  failureCode?: 'in_use';
-  presentation?: PendingOperationPresentation;
-}>;
-
-const activePendingOperationSchema = z
-  .object({
-    id: z.string().min(1),
-    status: z.string().min(1),
-    tool: z.string().min(1),
-    createdAt: z.string().min(1),
-    expiresAt: z.string().min(1),
-    amountCents: z.number().int().optional(),
-    description: z.string().optional(),
-    date: z.string().optional(),
-    accountId: z.string().optional(),
-    categoryId: z.string().optional(),
-    statementId: z.string().optional(),
-    fromAccountId: z.string().optional(),
-    supersedes: z.string().min(1).optional(),
-    failureCode: z.literal('in_use').optional(),
-    presentation: pendingOperationPresentationSchema.optional(),
-  })
-  .strict();
-
-const activePendingOperationsSchema = z
-  .object({
-    items: z.array(activePendingOperationSchema),
-    total: z.number(),
-  })
-  .strict();
-
-export async function fetchActivePendingOperations(workspaceId: string): Promise<ActivePendingOperation[]> {
-  const baseUrl = agentBaseUrl();
-  const response = await fetchWithAgentAuth(
-    workspaceId,
-    `${baseUrl}/agents/finance-chat-agent/${encodeURIComponent(workspaceId)}/rpc/pending-operations/active`,
-    {
-      method: "GET",
-      credentials: "include",
-      headers: { "X-Workspace-Id": workspaceId },
-    },
-  );
-  if (!response.ok) {
-    throw new Error("Não foi possível carregar as aprovações agora.");
-  }
-  // Strict parse: payloads carrying single-use approval material or otherwise
-  // malformed payloads are discarded wholesale — surfaced as an honest error,
-  const parsed = activePendingOperationsSchema.safeParse(await response.json());
-  if (!parsed.success) {
-    throw new Error("Não foi possível carregar as aprovações agora.");
-  }
-  return parsed.data.items;
 }
 
 /**

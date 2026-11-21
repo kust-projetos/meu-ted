@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, Bell, CalendarClock, ChevronDown, ChevronRight, ChevronUp, Eye, EyeOff, GripVertical, SlidersHorizontal, TrendingDown, TrendingUp } from "lucide-react";
 import { useAppState } from "@/lib/state/app-state-context";
-import { usePendingOperations } from "@/lib/state/use-pending-operations";
 import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
 import {
   usePullToRefresh,
@@ -110,9 +109,6 @@ export default function HomePage() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
   const dragRef = useRef<{ id: string; pointerId: number; index: number } | null>(null);
-  const pendingOperations = usePendingOperations(
-    workspace?.activeWorkspace?.id ?? null,
-  );
   const hasActiveWorkspace = workspace?.activeWorkspace != null;
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryRetrying, setSummaryRetrying] = useState(false);
@@ -295,9 +291,8 @@ export default function HomePage() {
     }
     return parts.join(" · ") || `${attention.length} pendências`;
   })();
-  const pendingApprovalsCount = pendingOperations.pendingCount ?? 0;
   const hasOverdueAttention = attention.some((item) => item.tone === "danger");
-  const totalAlertBadge = attention.length + pendingApprovalsCount;
+  const totalAlertBadge = attention.length;
   const checkingTotalCents = checkingAccounts.reduce((s, a) => s + a.balanceCents, 0);
   const checkingPositiveTotal = checkingAccounts.reduce(
     (s, a) => s + Math.max(0, a.balanceCents),
@@ -1229,34 +1224,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {pendingOperations.pendingCount !== null &&
-            pendingOperations.pendingCount > 0 && (
-              <button
-                type="button"
-                data-testid="hero-pending-approvals"
-                onClick={() => openTedChat()}
-                className="flex min-h-11 w-full items-center justify-between gap-3 border-t border-warning/20 bg-warning-tint/80 px-5 py-2.5 text-left transition-colors hover:bg-warning-tint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-warning"
-              >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <img
-                    src="/brand/ted-launcher.png"
-                    alt=""
-                    width={22}
-                    height={22}
-                    className="h-[22px] w-[22px] shrink-0 rounded-full object-cover ring-1 ring-warning/30"
-                  />
-                  <span className="min-w-0 truncate text-xs font-bold text-warning">
-                    {pendingOperations.pendingCount === 1
-                      ? "1 aprovação pendente no TED"
-                      : `${pendingOperations.pendingCount} aprovações pendentes no TED`}
-                  </span>
-                </span>
-                <span className="inline-flex shrink-0 items-center gap-0.5 text-xs font-bold text-warning">
-                  Revisar
-                  <ChevronRight size={14} aria-hidden="true" />
-                </span>
-              </button>
-            )}
         </section>
 
         {visibleNodes}

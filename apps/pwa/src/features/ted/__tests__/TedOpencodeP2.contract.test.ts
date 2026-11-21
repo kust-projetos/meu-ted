@@ -37,7 +37,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   sendAgentMessage,
-  decidePendingOperation,
   renewAgentSession,
   composeChatSend,
   isAnchorSupersededByHistory,
@@ -193,75 +192,7 @@ describe("P2 contrato — sendAgentMessage preserva o fio A0", () => {
     mockFetchOnce({ turnId: "t-empty", status: "completed" });
     const turn = await sendAgentMessage("ws-1", "oi", { messageId: "m-empty" });
     expect(turn.output).toBeUndefined();
-    expect(turn.pendingOperation).toBeUndefined();
     expect(turn.undoProposal).toBeUndefined();
-  });
-
-  it("succeeded SEM receipt canônico rejeita (nunca succeeded inventado)", async () => {
-    mockFetchOnce({
-      turnId: "t-bad",
-      status: "completed",
-      output: "pronto",
-      pendingOperation: { id: "op-bad", operation: "transactions.expense.create", status: "succeeded" },
-    });
-    const err = await rejectionOf(sendAgentMessage("ws-1", "crie gasto", { messageId: "m-bad" }));
-    expect(err.code).toBe("agent.execution_outcome_unknown");
-  });
-
-  it("succeeded COM receipt canônico vinculado atravessa (contrato preservado p/ P2)", async () => {
-    mockFetchOnce({
-      turnId: "t-good",
-      status: "completed",
-      output: "criado",
-      pendingOperation: {
-        id: "op-good",
-        operation: "transactions.expense.create",
-        status: "succeeded",
-        receipt: {
-          mutationId: "mut-1",
-          mutationKind: "transactions.expense.create",
-          status: "succeeded",
-          affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
-          operationId: "op-good",
-          entity: { type: "transaction", id: "tx-1" },
-        },
-      },
-    });
-    const turn = await sendAgentMessage("ws-1", "crie gasto", { messageId: "m-good" });
-    expect(turn.pendingOperation?.status).toBe("succeeded");
-    if (turn.pendingOperation?.status === "succeeded") {
-      expect(turn.pendingOperation.receipt.entity).toEqual({ type: "transaction", id: "tx-1" });
-    }
-  });
-});
-
-describe("P2 contrato — decisão leva só {decision, requestId} (nunca atestação)", () => {
-  it("corpo da decisão tem exatamente decision + requestId uuid, sem material de autoridade", async () => {
-    mockFetchOnce({
-      operationId: "op-9",
-      status: "succeeded",
-      receipt: {
-        mutationId: "mut-9",
-        mutationKind: "transactions.expense.create",
-        status: "succeeded",
-        affectedTargets: ["transactions", "accounts", "dashboard-summary", "budgets", "quick-insights"],
-        operationId: "op-9",
-        entity: { type: "transaction", id: "tx-9" },
-      },
-    });
-    const decision = await decidePendingOperation("ws-1", "op-9", "confirm", { tool: "transactions.expense.create" });
-    const payload = bodyJson(lastCall());
-    expect(Object.keys(payload).sort()).toEqual(["decision", "requestId"]);
-    expect(payload.decision).toBe("confirm");
-    expect(String(payload.requestId)).toMatch(UUID_RE);
-    for (const key of FORBIDDEN_WIRE_KEYS) expect(payload).not.toHaveProperty(key);
-    expect(decision.status).toBe("succeeded");
-  });
-
-  it("decisão succeeded sem receipt não é sucesso acionável", async () => {
-    mockFetchOnce({ operationId: "op-10", status: "succeeded" });
-    const err = await rejectionOf(decidePendingOperation("ws-1", "op-10", "confirm"));
-    expect(err.code).toBe("agent.execution_outcome_unknown");
   });
 });
 

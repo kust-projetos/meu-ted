@@ -39,7 +39,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
     decideUndoProposal: vi.fn(),
@@ -73,7 +72,6 @@ describe("TedChat scroll preserves reading (FIX-P1-UX #173)", () => {
     window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock as unknown as typeof window.HTMLElement.prototype.scrollIntoView;
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
     vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({
       turnId: "turn-1",

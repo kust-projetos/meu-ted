@@ -1,21 +1,20 @@
-// S1 — TED agent self-confirm (runtime only).
+// TED action executor (runtime only, unconditional).
 // Acceptance: success, bad assurance, 409 not_actionable, execution_uncertain,
-// intention-idempotency, flag OFF parity. No real secrets, no real HTTP, no
-// production surface: every collaborator is a local double.
+// intention-idempotency. No real secrets, no real HTTP, no production surface:
+// every collaborator is a local double.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createGatewayServer } from '../src/server.mjs';
 import { createConversationStore } from '../src/conversations.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 import { PendingClientError, proposeIdempotencyKey } from '../src/pending-client.mjs';
 import { createToolExecutors } from '../src/tool-defs.mjs';
 import {
-  isSelfConfirmEnabled,
   normalizeAssurance,
   isActionableAssurance,
-  createSelfConfirmExecutor,
-} from '../src/self-confirm.mjs';
+  createActionExecutor,
+} from '../src/action-executor.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 const DEVICE_TOKEN = 'synthetic-device-token-not-real-0001';
@@ -101,25 +100,23 @@ function headers() {
 }
 
 async function turn({
-  selfConfirmEnabled = true,
   client = fakeClient(),
   intent = baseIntent(),
   intentionId = INTENTION,
   repeat = false,
   promptOutput = 'Vou registrar a despesa.',
 } = {}) {
-  const proposalIntents = createProposalIntentRegistry();
+  const actionIntents = createActionIntentRegistry();
   const store = createConversationStore({ persistDir: approvedTmpRoot('self-confirm-gateway') });
   const gateway = createGatewayServer({
     resolveIdentity: async () => ({ workspace: 'w', actorId: 'actor', deviceId: 'device', role: 'owner' }),
     store,
-    proposalIntents,
-    selfConfirmEnabled,
+    actionIntents,
     pendingClient: client,
     promptHost: {
       async chat({ sessionID, intentionId: current }) {
-        // The bootstrap turn carries no proposal; only the target turn does.
-        if (current === intentionId) proposalIntents.record(sessionID, intent);
+        // The bootstrap turn carries no action; only the target turn does.
+        if (current === intentionId) actionIntents.record(sessionID, intent);
         return { turnId: 'turn-1', userMessageId: 'user-1', output: promptOutput };
       },
       async readRawMessages() {
@@ -150,21 +147,11 @@ async function turn({
     let response = await send();
     if (repeat) response = await send();
     const payload = await response.json();
-    return { status: response.status, payload, client, proposalIntents };
+    return { status: response.status, payload, client, actionIntents };
   } finally {
     await gateway.close();
   }
 }
-
-test('flag parse is strict: only the literal "1" enables self-confirm', () => {
-  assert.equal(isSelfConfirmEnabled(), false);
-  assert.equal(isSelfConfirmEnabled({}), false);
-  assert.equal(isSelfConfirmEnabled({ TED_AGENT_SELF_CONFIRM: '1' }), true);
-  for (const value of ['0', 'true', 'TRUE', 'yes', '', 1, true, null, undefined, {}, []]) {
-    assert.equal(isSelfConfirmEnabled({ TED_AGENT_SELF_CONFIRM: value }), false, `value ${String(value)}`);
-  }
-  assert.equal(isSelfConfirmEnabled(null), false);
-});
 
 test('assurance validation is strict and only the favorable triple is actionable', () => {
   assert.deepEqual(normalizeAssurance(ASSURANCE), { ...ASSURANCE });
@@ -183,46 +170,46 @@ test('assurance validation is strict and only the favorable triple is actionable
   assert.equal(normalizeAssurance({ complete: true, ambiguousEntity: false, explicitIntent: 'true' }), null);
 });
 
-test('propose_* carries assurance as metadata and never in normalizedArgs', async () => {
-  const registry = createProposalIntentRegistry();
-  const executors = createToolExecutors(async () => { throw new Error('propose must not call transport'); }, { proposalIntents: registry });
+test('action tools carry assurance as metadata and never in normalizedArgs', async () => {
+  const registry = createActionIntentRegistry();
+  const executors = createToolExecutors(async () => { throw new Error('propose must not call transport'); }, { actionIntents: registry });
   const host = { token: 'test-token', household: 'w', actorId: 'actor', deviceId: 'device' };
   const args = {
     amountCents: 5000, description: 'mercado', date: '2026-11-06',
     accountId: ACCOUNT, categoryId: CATEGORY, assurance: { ...ASSURANCE },
   };
-  const out = await executors.propose_expense(args, host, {
+  const out = await executors.record_expense(args, host, {
     sessionID: 's-assurance', intentionId: INTENTION,
   });
-  assert.equal(out.status, 'proposed');
+  assert.equal(out.status, 'recorded');
   const intent = registry.take('s-assurance');
   assert.deepEqual(intent.assurance, { ...ASSURANCE });
   assert.equal('assurance' in intent.normalizedArgs, false);
   assert.deepEqual(Object.keys(intent.normalizedArgs).sort(), ['accountId', 'amountCents', 'categoryId', 'date', 'description']);
 
-  const bad = await executors.propose_expense(
+  const bad = await executors.record_expense(
     { ...args, assurance: { complete: 'yes', ambiguousEntity: false, explicitIntent: true } },
     host,
     { sessionID: 's-bad', intentionId: INTENTION },
   );
-  assert.equal(bad.status, 'proposed', 'malformed assurance must not break the legacy tool flow');
+  assert.equal(bad.status, 'recorded', 'malformed assurance must not break the tool flow');
   assert.equal(registry.take('s-bad').assurance, null);
 
-  await executors.propose_expense(
+  await executors.record_expense(
     { amountCents: 5000, description: 'mercado', date: '2026-11-06', accountId: ACCOUNT, categoryId: CATEGORY },
     host,
     { sessionID: 's-none', intentionId: INTENTION },
   );
-  assert.equal('assurance' in registry.take('s-none'), false, 'absent assurance stays absent (flag-off parity)');
+  assert.equal('assurance' in registry.take('s-none'), false, 'absent assurance stays absent');
 });
 
-test('flag ON + favorable assurance executes the whole pipeline and returns a receipt-only execution DTO', async () => {
+test('favorable assurance executes the whole pipeline and returns a receipt-only execution DTO', async () => {
   const client = fakeClient();
   const result = await turn({ client });
   assert.equal(result.status, 200);
-  assert.deepEqual(Object.keys(result.payload).sort(), ['execution', 'intentionId', 'output', 'proposalObserved', 'status', 'turnId']);
+  assert.deepEqual(Object.keys(result.payload).sort(), ['actionObserved', 'execution', 'intentionId', 'output', 'status', 'turnId']);
   assert.equal(result.payload.intentionId, INTENTION);
-  assert.equal('proposal' in result.payload, false, 'no actionable card after execution');
+  assert.equal('proposal' in result.payload, false);
   assert.deepEqual(result.payload.execution, {
     operationId: OPERATION_ID,
     tool: TOOL,
@@ -263,7 +250,7 @@ test('unfavorable or malformed assurance never executes and asks in text', async
     const result = await turn({ client, intent });
     assert.equal(result.status, 200);
     assert.equal('execution' in result.payload, false, `no execution for ${JSON.stringify(assurance)}`);
-    assert.equal('proposal' in result.payload, false, 'no card that looks auto-approved');
+    assert.equal('proposal' in result.payload, false);
     assert.match(result.payload.output, /esclarecer|concluir com segurança/i);
     assert.equal(client.calls.mint.length, 0);
     assert.equal(client.calls.propose.length, 0);
@@ -339,7 +326,7 @@ test('same intentionId is executed at most once (turn replay + executor memo)', 
 
   // Direct defense-in-depth: the executor memoizes by intentionId too.
   const directClient = fakeClient();
-  const executor = createSelfConfirmExecutor({ client: directClient });
+  const executor = createActionExecutor({ client: directClient });
   const identityFields = { workspaceId: 'w', actorId: 'actor', deviceId: 'device' };
   const first = await executor.run({ identity: identityFields, intentionId: 'same', intent: baseIntent() });
   const second = await executor.run({ identity: identityFields, intentionId: 'same', intent: baseIntent() });
@@ -348,16 +335,21 @@ test('same intentionId is executed at most once (turn replay + executor memo)', 
   assert.equal(executor.size(), 1);
 });
 
-test('flag OFF preserves the legacy actionable proposal payload byte-for-byte', async () => {
-  const client = fakeClient();
-  const result = await turn({ selfConfirmEnabled: false, client });
-  assert.equal(result.status, 200);
-  assert.deepEqual(Object.keys(result.payload).sort(), ['intentionId', 'output', 'proposal', 'proposalObserved', 'status', 'turnId']);
-  assert.deepEqual(result.payload.proposal, baseIntent());
-  assert.equal('execution' in result.payload, false);
-  assert.equal(client.calls.mint.length, 0);
-  assert.equal(client.calls.propose.length, 0);
-  assert.equal(client.calls.confirm.length, 0);
-  assert.equal(client.calls.execute.length, 0);
-  assert.equal(client.calls.outcome.length, 0);
+test('execution is unconditional: the retired TED_AGENT_SELF_CONFIRM env has no effect', async () => {
+  const previous = process.env.TED_AGENT_SELF_CONFIRM;
+  try {
+    for (const value of ['0', '1', undefined]) {
+      if (value === undefined) delete process.env.TED_AGENT_SELF_CONFIRM;
+      else process.env.TED_AGENT_SELF_CONFIRM = value;
+      const client = fakeClient();
+      const result = await turn({ client });
+      assert.equal(result.status, 200);
+      assert.equal(result.payload.execution.status, 'succeeded', `env=${value}`);
+      assert.equal(client.calls.execute.length, 1, `env=${value}`);
+      assert.equal('proposal' in result.payload, false);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TED_AGENT_SELF_CONFIRM;
+    else process.env.TED_AGENT_SELF_CONFIRM = previous;
+  }
 });

@@ -1,11 +1,11 @@
-// P3 write slice RED: propose_expense as a PROPOSAL INTENT only.
+// P3 write slice RED: record_expense as a PROPOSAL INTENT only.
 //
 // Contract under test:
 // - Default product catalog stays exactly the two P2 reads; the P3 writes
 //   opt-in (`TED_OPENCODE_P3_WRITES_ENABLED=1`, NODE_ENV !== 'production')
-//   adds propose_expense + list_categories (category resolution). Production
+//   adds record_expense + list_categories (category resolution). Production
 //   forces them off.
-// - propose_expense NEVER performs HTTP and NEVER writes: it validates args,
+// - record_expense NEVER performs HTTP and NEVER writes: it validates args,
 //   derives the stable intention and records ONE proposal intent for the
 //   gateway to hand to the authenticated PWA. Identity stays host-bound.
 // - The registry is process-local, keyed by native sessionID, and take() is
@@ -28,7 +28,7 @@ import {
   defineTedFinancePlugin,
   isP3WritesEnabled,
 } from '../src/plugin.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -56,8 +56,8 @@ const validArgs = (overrides = {}) => ({
   ...overrides,
 });
 
-describe('p3 propose_expense: catalog gating', () => {
-  it('default product catalog excludes propose_expense', () => {
+describe('p3 record_expense: catalog gating', () => {
+  it('default product catalog excludes record_expense', () => {
     assert.equal(isP3WritesEnabled(OFF_ENV), false);
     assert.deepEqual([...PRODUCT_TOOL_NAMES].sort(), ['get_month_summary', 'list_accounts']);
     assert.deepEqual(productToolDefs(OFF_ENV).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
@@ -65,7 +65,7 @@ describe('p3 propose_expense: catalog gating', () => {
 
   it('explicit writes activation applies in production too (no NODE_ENV shortcut)', () => {
     assert.equal(isP3WritesEnabled(PROD_ENV), true);
-    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'propose_expense'));
+    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'record_expense'));
     // Absent flag stays OFF even in production.
     assert.equal(isP3WritesEnabled({ NODE_ENV: 'production' }), false);
     assert.deepEqual(productToolDefs({ NODE_ENV: 'production' }).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
@@ -75,61 +75,61 @@ describe('p3 propose_expense: catalog gating', () => {
     assert.equal(isP3WritesEnabled(WRITE_ENV), true);
     const names = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
     assert.deepEqual(names, FULL_CATALOG);
-    const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_expense');
+    const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'record_expense');
     assert.equal(propose.input.type, 'object');
     assert.ok(propose.output && propose.output.type === 'object');
     assert.deepEqual([...propose.input.required].sort(), ['accountId', 'amountCents', 'categoryId', 'description']);
-    assert.ok(TOOL_DEFS.some((d) => d.name === 'propose_expense'));
-    assert.ok(TOOL_NAMES.includes('propose_expense'));
+    assert.ok(TOOL_DEFS.some((d) => d.name === 'record_expense'));
+    assert.ok(TOOL_NAMES.includes('record_expense'));
   });
 });
 
-describe('p3 propose_expense: argument validation', () => {
+describe('p3 record_expense: argument validation', () => {
   it('accepts the exact expense contract and rejects missing/invalid values', () => {
-    assert.deepEqual(validateToolArgs('propose_expense', validArgs()), validArgs());
-    assert.deepEqual(validateToolArgs('propose_expense', validArgs({ date: undefined })).date, undefined);
+    assert.deepEqual(validateToolArgs('record_expense', validArgs()), validArgs());
+    assert.deepEqual(validateToolArgs('record_expense', validArgs({ date: undefined })).date, undefined);
 
-    assert.throws(() => validateToolArgs('propose_expense', {}), /amountCents/);
+    assert.throws(() => validateToolArgs('record_expense', {}), /amountCents/);
     for (const amount of [0, -1, 12.5, '5000', Number.MAX_SAFE_INTEGER + 1]) {
       assert.throws(
-        () => validateToolArgs('propose_expense', validArgs({ amountCents: amount })),
+        () => validateToolArgs('record_expense', validArgs({ amountCents: amount })),
         /amountCents must be a positive safe integer/,
         `amount ${amount}`,
       );
     }
-    assert.throws(() => validateToolArgs('propose_expense', validArgs({ description: '' })), /description/);
-    assert.throws(() => validateToolArgs('propose_expense', validArgs({ description: 'x'.repeat(241) })), /description/);
-    assert.throws(() => validateToolArgs('propose_expense', validArgs({ accountId: 'nope' })), /accountId must be a uuid/);
-    assert.throws(() => validateToolArgs('propose_expense', validArgs({ categoryId: 'nope' })), /categoryId must be a uuid/);
-    assert.throws(() => validateToolArgs('propose_expense', validArgs({ date: '06/11/2026' })), /date must be YYYY-MM-DD/);
+    assert.throws(() => validateToolArgs('record_expense', validArgs({ description: '' })), /description/);
+    assert.throws(() => validateToolArgs('record_expense', validArgs({ description: 'x'.repeat(241) })), /description/);
+    assert.throws(() => validateToolArgs('record_expense', validArgs({ accountId: 'nope' })), /accountId must be a uuid/);
+    assert.throws(() => validateToolArgs('record_expense', validArgs({ categoryId: 'nope' })), /categoryId must be a uuid/);
+    assert.throws(() => validateToolArgs('record_expense', validArgs({ date: '06/11/2026' })), /date must be YYYY-MM-DD/);
   });
 
   it('keeps identity and idempotency host-bound (never tool args)', () => {
     for (const key of ['token', 'actorId', 'workspaceId', 'householdId', 'deviceId', 'sessionId', 'intentionId', 'idempotencyKey', 'callId']) {
       assert.throws(
-        () => validateToolArgs('propose_expense', { ...validArgs(), [key]: 'x' }),
+        () => validateToolArgs('record_expense', { ...validArgs(), [key]: 'x' }),
         /forbidden key/,
         `${key} must stay host-bound`,
       );
     }
-    assert.throws(() => validateToolArgs('propose_expense', { ...validArgs(), bogus: 1 }), /unknown arg/);
+    assert.throws(() => validateToolArgs('record_expense', { ...validArgs(), bogus: 1 }), /unknown arg/);
   });
 });
 
-describe('p3 propose_expense: intent only, never HTTP/write', () => {
+describe('p3 record_expense: intent only, never HTTP/write', () => {
   it('records one host-bound intent and returns a proposal status (no transport call)', async () => {
-    const registry = createProposalIntentRegistry();
+    const registry = createActionIntentRegistry();
     let transportCalls = 0;
     const executors = createToolExecutors(
       async () => { transportCalls += 1; throw new Error('propose must never call the finance transport'); },
-      { proposalIntents: registry },
+      { actionIntents: registry },
     );
-    const out = await executors.propose_expense(validArgs(), host, {
+    const out = await executors.record_expense(validArgs(), host, {
       sessionID: 'session-1',
       intentionId: 'int-abc',
     });
-    assert.equal(transportCalls, 0, 'no HTTP from propose_expense');
-    assert.equal(out.status, 'proposed');
+    assert.equal(transportCalls, 0, 'no HTTP from record_expense');
+    assert.equal(out.status, 'recorded');
     assert.match(out.summary, /R\$\s?50,00/);
 
     const intent = registry.take('session-1');
@@ -149,9 +149,9 @@ describe('p3 propose_expense: intent only, never HTTP/write', () => {
   });
 
   it('defaults the date to the current UTC day when omitted', async () => {
-    const registry = createProposalIntentRegistry();
-    const executors = createToolExecutors(async () => { throw new Error('no'); }, { proposalIntents: registry });
-    await executors.propose_expense(validArgs({ date: undefined }), host, {
+    const registry = createActionIntentRegistry();
+    const executors = createToolExecutors(async () => { throw new Error('no'); }, { actionIntents: registry });
+    await executors.record_expense(validArgs({ date: undefined }), host, {
       sessionID: 'session-date',
       intentionId: 'int-date',
     });
@@ -160,18 +160,18 @@ describe('p3 propose_expense: intent only, never HTTP/write', () => {
   });
 
   it('requires host context and a stable intention; rejects hostless/identity args', async () => {
-    const registry = createProposalIntentRegistry();
-    const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }), { proposalIntents: registry });
+    const registry = createActionIntentRegistry();
+    const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }), { actionIntents: registry });
     await assert.rejects(
-      () => executors.propose_expense(validArgs(), null, { sessionID: 's', intentionId: 'int-x' }),
+      () => executors.record_expense(validArgs(), null, { sessionID: 's', intentionId: 'int-x' }),
       /host-bound context is required/,
     );
     await assert.rejects(
-      () => executors.propose_expense(validArgs(), host, { sessionID: 's' }),
+      () => executors.record_expense(validArgs(), host, { sessionID: 's' }),
       /stable intentionId is required/,
     );
     await assert.rejects(
-      () => executors.propose_expense({ ...validArgs(), token: 'x' }, host, { sessionID: 's', intentionId: 'int-x' }),
+      () => executors.record_expense({ ...validArgs(), token: 'x' }, host, { sessionID: 's', intentionId: 'int-x' }),
       /forbidden key/,
     );
     assert.equal(registry.take('s'), null, 'refused calls must not record an intent');
@@ -179,7 +179,7 @@ describe('p3 propose_expense: intent only, never HTTP/write', () => {
 
   it('exposes no confirm/execute surface to the LLM', async () => {
     const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }), {
-      proposalIntents: createProposalIntentRegistry(),
+      actionIntents: createActionIntentRegistry(),
     });
     for (const name of ['confirm_expense', 'execute_expense', 'confirm', 'execute', 'approve_expense']) {
       assert.equal(name in executors, false, `${name} must not exist`);
@@ -189,7 +189,7 @@ describe('p3 propose_expense: intent only, never HTTP/write', () => {
   });
 });
 
-describe('p3 propose_expense: plugin registration', () => {
+describe('p3 record_expense: plugin registration', () => {
   it('registers 2 tools by default and 5 with the local writes opt-in', async () => {
     const allowSetup = {
       permission: { assert: async () => {} },
@@ -211,25 +211,25 @@ describe('p3 propose_expense: plugin registration', () => {
     const addedProd = [];
     const prodDef = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), { env: PROD_ENV });
     await prodDef.setup({ ...allowSetup, tool: { transform: async (fn) => { fn({ add: (t) => addedProd.push(t) }); } } });
-    assert.ok(addedProd.some((t) => t.name === 'propose_expense'));
+    assert.ok(addedProd.some((t) => t.name === 'record_expense'));
   });
 
-  it('propose_expense is permission-gated before any intent is recorded', async () => {
-    const registry = createProposalIntentRegistry();
+  it('record_expense is permission-gated before any intent is recorded', async () => {
+    const registry = createActionIntentRegistry();
     const added = [];
     const def = defineTedFinancePlugin(() => async () => ({ statusCode: 200, body: {} }), {
       env: WRITE_ENV,
-      proposalIntents: registry,
+      actionIntents: registry,
     });
     await def.setup({
       permission: { assert: async ({ action, resources }) => {
         assert.equal(action, 'ted.finance.read');
-        if (resources.includes('propose_expense')) throw new Error('denied');
+        if (resources.includes('record_expense')) throw new Error('denied');
       } },
       session: { hook: async () => ({ dispose: async () => {} }) },
       tool: { transform: async (fn) => { fn({ add: (t) => added.push(t) }); } },
     });
-    const propose = added.find((t) => t.name === 'propose_expense');
+    const propose = added.find((t) => t.name === 'record_expense');
     const err = await propose
       .execute(validArgs(), { sessionID: 's-denied', messageID: 'm-1', id: 'call-1', agent: 'ted' })
       .catch((e) => e);

@@ -10,7 +10,6 @@ import {
 describe("canonical IA routes (item 13)", () => {
   it("builds tab routes with default abas", () => {
     expect(routeCompromissos()).toBe("/compromissos?aba=a-pagar");
-    expect(routeCompromissos("pendencias")).toBe("/compromissos?aba=pendencias");
     expect(routePatrimonio()).toBe("/hub/patrimonio?aba=contas");
     expect(routePlanejamento()).toBe("/hub/planejamento?aba=orcamentos");
     expect(routeAlertas()).toBe("/hub/alertas?aba=financeiras");
@@ -28,7 +27,7 @@ describe("canonical IA routes (item 13)", () => {
   it("redirects every absorbed page route to its canonical tab", () => {
     const bySource = new Map(CANONICAL_REDIRECTS.map((r) => [r.source, r.destination]));
     expect(bySource.get("/a-pagar")).toBe("/compromissos?aba=a-pagar");
-    expect(bySource.get("/pending")).toBe("/compromissos?aba=pendencias");
+    expect(bySource.get("/pending")).toBe("/compromissos?aba=a-pagar");
     expect(bySource.get("/contas")).toBe("/hub/patrimonio?aba=contas");
     expect(bySource.get("/cartoes")).toBe("/hub/patrimonio?aba=cartoes");
     expect(bySource.get("/patrimonio")).toBe("/hub/patrimonio?aba=patrimonio");

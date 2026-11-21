@@ -99,7 +99,7 @@ describe('gateway server (loopback PWA shapes)', () => {
       });
       assert.equal(res.status, 200);
       const dto = await res.json();
-      assert.deepEqual(Object.keys(dto).sort(), ['intentionId', 'output', 'proposalObserved', 'status', 'turnId']);
+      assert.deepEqual(Object.keys(dto).sort(), ['actionObserved', 'intentionId', 'output', 'status', 'turnId']);
       assert.equal(dto.status, 'completed');
       assert.equal(dto.intentionId, 'm-1');
       assert.ok(dto.output.includes('Quais contas?'));

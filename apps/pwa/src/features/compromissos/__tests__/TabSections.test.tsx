@@ -1,5 +1,4 @@
 import { render, screen } from "@/lib/test-utils";
-import userEvent from "@testing-library/user-event";
 import CompromissosTabs from "../CompromissosTabs";
 import PatrimonioTabs from "../../patrimonio/PatrimonioTabs";
 import PlanejamentoTabs from "../../planejamento/PlanejamentoTabs";
@@ -20,9 +19,6 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/features/payables/PayablesPage", () => ({
   default: () => <div data-testid="payables-page">Payables</div>,
-}));
-vi.mock("@/features/pending-operations/PendingOperationsPage", () => ({
-  default: () => <div data-testid="pending-page">Pending</div>,
 }));
 vi.mock("@/features/accounts/AccountsPage", () => ({
   default: () => <div data-testid="accounts-page">Accounts</div>,
@@ -57,23 +53,11 @@ describe("canonical tab sections (item 13)", () => {
     navigation.search = "";
   });
 
-  it("compromissos defaults to A Pagar and switches to Pendências", async () => {
-    const user = userEvent.setup();
+  it("compromissos renders only A Pagar (no aprovações tab)", () => {
     navigation.pathname = "/compromissos";
-    const { unmount } = render(<CompromissosTabs />);
-    expect(screen.getByTestId("payables-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("pending-page")).not.toBeInTheDocument();
-    unmount();
-
-    navigation.search = "aba=pendencias";
     render(<CompromissosTabs />);
-    expect(screen.getByTestId("pending-page")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "A Pagar" }));
-    expect(navigation.replace).toHaveBeenCalledWith(
-      expect.stringContaining("aba=a-pagar"),
-      { scroll: false },
-    );
+    expect(screen.getByTestId("payables-page")).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
   it("patrimonio cycles contas, cartoes and patrimonio tabs", () => {

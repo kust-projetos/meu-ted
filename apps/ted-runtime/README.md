@@ -1,12 +1,13 @@
 # @pi-finance/ted-runtime — runtime conversacional OpenCode
 
-## Status atual (2026-11-13)
+## Status atual (2026-11-21)
 
 - Este runtime é o runtime conversacional principal do Meu TED, atrás de um canário por workspace.
 - Container `ted-runtime` na VPS Contabo (Traefik, rota `https://api.synkroo.com.br/ted-runtime`), `TED_RUNTIME_PROFILE=live`, `TED_RUNTIME_IDENTITY=prod`.
-- Flags efetivas no compose: `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`; o catálogo exposto é 2 tools padrão + 17 leituras + 14 propostas intent-only (as propostas nunca chamam a API, nunca confirmam e nunca executam).
-- Canário da PWA: `TED_OPENCODE_RUNTIME_ENABLED=1` e `TED_OPENCODE_WORKSPACES` com dois workspaces (`d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`); `chat`, `history` e `session/new` vão para este runtime, que também serve as RPCs de pending/undo (`pending-operations` propose/active/decision e `undo` active/decision) — pending/undo **não** são servidos pelo A0. Attachments seguem fora do roteamento deste runtime.
-- Rollback: `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve todas as conversas ao A0.
+- Flags efetivas no compose: `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`; o catálogo exposto é 2 tools padrão + 17 leituras + 14 tools de AÇÃO. O gateway executa a ação no mesmo turno quando o modelo declara `assurance` favorável; dado faltante ou ambiguidade vira pergunta em texto. Não existe card de aprovação, proposta pendente ou `TED_AGENT_SELF_CONFIRM`.
+- Canário da PWA: `TED_OPENCODE_RUNTIME_ENABLED=1` e `TED_OPENCODE_WORKSPACES` com dois workspaces (`d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`); `chat`, `history` e `session/new` vão para este runtime, que também serve as RPCs de `undo` (active/decision) — undo **não** é servido pelo A0. As antigas RPCs `pending-operations` (propose/active/decision) foram removidas. Attachments seguem fora do roteamento deste runtime.
+- Decisão vigente: [ADR-034 — Agente executa sem aprovação](../../docs/adr/ADR-034-agente-executa-sem-aprovacao.md) (supersede o ADR-033). Rollback da remoção da aprovação: redeploy da imagem `ted-runtime:rollback-pre-<sha>`; não existe mais flag de confirmação.
+- Rollback legado de roteamento (registro histórico): `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolvia conversas ao A0, hoje descontinuado.
 - A seção "Fatia P1" abaixo é registro histórico da entrega incremental, não o estado vigente.
 
 Fatia P1 da migração OpenCode-first (ADR-031, `docs/plans/2026-10-31-ted-opencode-first/`).
@@ -18,9 +19,9 @@ Fatia P1 da migração OpenCode-first (ADR-031, `docs/plans/2026-10-31-ted-openc
 identidade/transport/runtime-ops reais; rotas respondem tipado sem API, boot
 + close limpos) + núcleo parcial: doubles + stub HTTP em processo
 (ver `node --test` abaixo), defs/executores das 2 reads P2 por padrão,
-`list_categories` GET-only sob opt-in local P3 e `propose_expense`/`propose_income`
-(P3, opt-in local) que registram apenas uma INTENÇÃO de proposta — nunca chamam
-a API financeira, nunca confirmam e nunca executam —, com validação de
+`list_categories` GET-only sob opt-in local P3 e `record_expense`/`record_income`
+(P3, opt-in local), que registram uma ação validada que o gateway executa no mesmo
+turno — a API financeira permanece a única autoridade —, com validação de
 shape 2xx (SPEC §5), bindings host-bound, plugin nativo de finanças como
 único caminho de tools do produto (sem superfície façade em produção; o
 helper com filtro owner-only vive só em `tests/helpers/facade.mjs` para
@@ -61,11 +62,10 @@ gate `READ_SLICE_PASS` PWA→modelo→tools→API→UI. Os testes
 `ted-runtime-gateway-auth.test.ts` (2/2) exercitam handlers reais em Fastify
 loopback com Better-Auth/token/ledger sintéticos e o transporte/tool executor;
 não chamam `session.prompt`, não renderizam uma resposta de modelo na PWA e não
-acessam produção/Postgres. A fatia P3 de escrita foi entregue como INTENÇÃO de
-proposta: `propose_expense` e `propose_income` registram o intent e o gateway o
-entrega à PWA autenticada; a PWA chama o broker estreito do Agent, o ÚNICO componente que
-emite `financial.approval.propose` (A4). O runtime não possui segredo de
-delegação, não cria capability e não confirma/executa. O texto desta seção descreve a fatia P1 histórica; o estado vigente é o registrado em "Status atual" no topo deste arquivo.
+acessam produção/Postgres. A fatia de escrita evoluiu: as tools de ação registram o intent e o gateway
+executa a ação no mesmo turno com token delegado próprio, recibo e `undo`; o pipeline
+Pending V2 permanece apenas como motor interno server-side e não há superfície de
+aprovação. O runtime não expõe capability/atestação ao modelo. O texto desta seção descreve a fatia P1 histórica; o estado vigente é o registrado em "Status atual" no topo deste arquivo.
 
 ## Aproveitamento do spike (revisão, nunca cópia cega)
 
@@ -73,13 +73,13 @@ Origem somente-leitura: `D:/projetos/pi-ted-runtime-spike/experiments/ted-runtim
 
 | Artefato do spike | Destino no produto |
 |---|---|
-| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` e `propose_expense`/`propose_income` P3 opcionais (intent-only) |
+| `bootstrap/ted-finance-tools.mjs` (defs + executores, intenção, guards) | ADAPTADO → `src/tool-defs.mjs`, 2 reads P2 por padrão + `list_categories` e `record_expense`/`record_income` P3 opcionais (ação executada no mesmo turno) |
 | `bootstrap/session-bindings.mjs` (Map host-bound) | ADAPTADO → `src/session-bindings.mjs`, comportamento preservado |
 | `bootstrap/ted-gateway.mjs` (façade do spike) | NÃO adaptado como superfície de produto — sem `src/facade.mjs`; helper com filtro owner-only mantido só em `tests/helpers/facade.mjs` para testes legados de contrato (fail-closed, sem `listCatalogs`) |
 | `bootstrap/ted-config.cjs` + `env.cjs` (isolamento) | ADAPTADO → `src/bootstrap.mjs`, SEM `process.chdir`, COM guarda um-host-por-processo |
-| `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; reads + intent somente com opt-in local P3 |
+| `bootstrap/plugins/ted-finance/index.mjs` (registro nativo) | ADAPTADO → `src/plugin.mjs`, registra 2 reads P2 por padrão; reads + ações somente com opt-in local P3 |
 | `bootstrap/finance-transport.mjs` (filho tsx p/ test-app) | NÃO importado — substituído por `src/transport.mjs` (fetch contra baseUrl do chamador) |
-| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `propose_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados. `list_categories` ADAPTADO como leitura GET-only opcional P3. `propose_expense`/`propose_income` RECONSTRUÍDOS como intent-only (sem bridge/PG, sem HTTP, sem confirm/execute); a persistência Pending V2 acontece só no broker do Agent (A4). |
+| `finance-bridge*.ts`, `finance-transport-pg.mjs`, seeds, traces, runners, `record_expense` (+ confirmation runners) | Bridges/harnesses sintéticos/PG e runners NÃO importados. `list_categories` ADAPTADO como leitura GET-only opcional P3. `record_expense`/`record_income` RECONSTRUÍDOS como tools de ação (sem bridge/PG, sem HTTP direto; o gateway executa via Pending V2 com token delegado). |
 
 ## Contrato de autenticação do transporte (verificado, não inventado)
 
@@ -158,18 +158,23 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
 
 - `src/tool-defs.mjs` — 2 P2 reads (schemas in+out), o conjunto opt-in de
   leituras financeiras (categorias, cartões, faturas, transações, insights,
-  analytics, orçamentos, metas, contas a pagar e auditoria) e as propostas
-  intent-only (`propose_expense`, `propose_income`, `propose_card_purchase`,
-  `propose_transfer`, `propose_statement_payment`, `propose_account_create`,
-  `propose_category_create`, `propose_transaction_update`,
-  `propose_account_update`, `propose_account_deactivate`,
-  `propose_category_update`, `propose_category_deactivate`,
-  `propose_payable_create`, `propose_payable_pay`). Nenhuma proposta chama a
-  API: registra `{tool, intentionId, normalizedArgs, summary}` no registry
-  process-local; a persistência Pending V2 acontece só no broker do Agent (A4).
-- `src/proposal-intents.mjs` — registry process-local do intent (uma proposta por
-  sessão nativa; `take` destrutivo, `clear` no início de cada turno). Não é registro
-  financeiro e não sobrevive a restart.
+  analytics, orçamentos, metas, contas a pagar e auditoria) e as 14 tools de AÇÃO
+  (`record_expense`, `record_income`, `record_card_purchase`,
+  `transfer_between_accounts`, `pay_card_statement`, `create_account`,
+  `create_category`, `update_transaction`,
+  `rename_account`, `deactivate_account`,
+  `rename_category`, `deactivate_category`,
+  `create_payable`, `pay_payable`), mapeadas internamente para os ids da API em
+  `PROPOSAL_TOOL_SPECS`. Cada tool registra `{tool, intentionId, normalizedArgs, summary}`
+  no registry process-local e o gateway aciona o pipeline Pending V2 para que a API
+  persista e execute no mesmo turno; `assurance` é metadado de completude, nunca autoridade.
+- `src/action-executor.mjs` — execução incondicional pela ledger/API quando `assurance` é
+  favorável; sem dado ou com ambiguidade devolve pergunta em texto (sem card). Substitui o
+  antigo `self-confirm.mjs`.
+- `src/action-intents.mjs` — registry process-local do intent (uma ação por sessão nativa;
+  `take` destrutivo, `clear` no início de cada turno). Não é registro financeiro e não sobrevive a restart.
+- `src/undo-actions.mjs` — registro da ação de desfazer (`undo_last_action`), que continua gerando o
+  card de `undo` do usuário; substitui o antigo `correction-actions.mjs`.
 - `src/session-bindings.mjs` — registro host process-local (só memória; token nunca em disco/log/erro)
   + rotação controlada `rotateSessionBinding` (só sob a fila do wrapper, após idle) +
   quarentena `quarantineSession`/`isQuarantined` (fail-closed `host_binding_quarantined`).
@@ -193,14 +198,14 @@ Paridade: linhas de ownership durável/reauth/ADR-027 seguem NOT_PROVEN.
   + toda sonda `session.active` com AbortSignal e limite pelo prazo restante.
 - `src/plugin.mjs` — registro nativo 2.2.4 exatamente das 2 reads P2 por padrão
   (`TED_OPENCODE_P3_READS_ENABLED=1` expõe o conjunto de leituras financeiras;
-  `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também todas as propostas
-  intent-only; ausência de flag mantém tudo off em qualquer ambiente) + gate nativo de permissão em
+  `TED_OPENCODE_P3_WRITES_ENABLED=1` expõe também as 14 tools de ação;
+  ausência de flag mantém tudo off em qualquer ambiente) + gate nativo de permissão em
   todo execute (`ctx.permission.assert` com `ted.finance.read`/`[toolName]` e o
   contexto real da invocação ANTES de host/executor/HTTP; sem a API/contexto
   falha fechado — mecanismo nativo, não um novo sistema de auth) +
   `getEffectiveToolNames`
   (catálogo efetivo SÓ via `ctx.tool.list()` dentro do plugin; a superfície HTTP não tem tool group;
-  o seam `onEffectiveTools` captura o catálogo FINAL pós-transform — built-ins + reads + intent).
+  o seam `onEffectiveTools` captura o catálogo FINAL pós-transform — built-ins + reads + ações).
 - `src/gateway.mjs` — identidade server-side: mint `POST /auth/agent-token`
   (cookie + `x-workspace-id` + `x-device-token`) + `GET /auth/devices/me`;
   workspace canônico da autoridade, acordo device×workspace, erros sem segredo.

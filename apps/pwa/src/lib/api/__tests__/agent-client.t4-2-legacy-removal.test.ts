@@ -36,9 +36,7 @@ describe("T4.2 retired-runtime surface removal (ARCH-V4-06a)", () => {
     for (const name of [
       "sendAgentMessage",
       "fetchAgentHistory",
-      "decidePendingOperation",
       "renewAgentSession",
-      "fetchActivePendingOperations",
     ]) {
       expect(typeof (agentClient as Record<string, unknown>)[name]).toBe("function");
     }

@@ -80,10 +80,8 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
-    decidePendingOperation: vi.fn(),
     renewAgentSession: vi.fn(),
   };
 });
@@ -152,7 +150,6 @@ beforeEach(() => {
   vi.mocked(agentClient.fetchAgentHistory).mockImplementation(
     async (workspaceId: string) => histories[workspaceId] ?? [],
   );
-  vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
   vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([]);
   vi.mocked(agentClient.sendAgentMessage).mockResolvedValue(okTurn("t1"));
 });
@@ -468,7 +465,6 @@ describe("TedChat — AC07: resultado tardio NÃO entra no escopo novo", () => {
     expect(screen.queryByText("conversa do ws 1")).toBeNull();
 
     const historyCallsAtSwitch = vi.mocked(agentClient.fetchAgentHistory).mock.calls.length;
-    const activeCallsAtSwitch = vi.mocked(agentClient.fetchActivePendingOperations).mock.calls.length;
 
     // O turno antigo só termina agora.
     flight.resolve(okTurn("t-ws1", "resposta do ws 1"));
@@ -476,46 +472,11 @@ describe("TedChat — AC07: resultado tardio NÃO entra no escopo novo", () => {
 
     // 1) Nenhum histórico/active-list do escopo antigo é buscado após a troca.
     expect(vi.mocked(agentClient.fetchAgentHistory).mock.calls.slice(historyCallsAtSwitch)).toHaveLength(0);
-    expect(vi.mocked(agentClient.fetchActivePendingOperations).mock.calls.slice(activeCallsAtSwitch)).toHaveLength(0);
     // 2) O texto do workspace antigo não aparece no chat novo…
     expect(screen.queryByText("resposta do ws 1")).toBeNull();
     // 3) …e o chat novo continua íntegro.
     expect(screen.getByText("conversa do ws 2")).toBeInTheDocument();
     expect(screen.queryByText("conversa do ws 1")).toBeNull();
-  });
-
-  it("troca de workspace durante o request: card de aprovação do workspace antigo não entra no chat novo", async () => {
-    const user = userEvent.setup();
-    histories["ws-2"] = [];
-    const view = await renderReady();
-
-    const flight = deferred<agentClient.AgentTurn>();
-    vi.mocked(agentClient.sendAgentMessage).mockReturnValueOnce(flight.promise);
-    await send(user, "Gastei R$ 50 no mercado");
-
-    wsMock.ws.activeWorkspace = WS2;
-    view.rerender(<TedChat />);
-    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledWith("ws-2"));
-    const activeCallsAtSwitch = vi.mocked(agentClient.fetchActivePendingOperations).mock.calls.length;
-
-    flight.resolve({
-      turnId: "t-ws1",
-      status: "completed",
-      output: "Proposta criada no ws 1.",
-      pendingOperation: {
-        id: "pending-ws1",
-        status: "proposed",
-        operation: "transactions.expense.create",
-        summary: "Mercado",
-      },
-    } as agentClient.AgentTurn);
-    await settle();
-
-    expect(vi.mocked(agentClient.fetchActivePendingOperations).mock.calls.slice(activeCallsAtSwitch)).toHaveLength(0);
-    // O card proposed do escopo antigo nunca aparece no chat novo.
-    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
-    expect(screen.queryByText(/Confirmar despesa/i)).toBeNull();
-    expect(screen.queryByText("Proposta criada no ws 1.")).toBeNull();
   });
 
   it("logout durante o request (sem workspace ativo): o resultado tardio não recarrega histórico do workspace anterior", async () => {
@@ -553,7 +514,6 @@ describe("TedChat — AC07: resultado tardio NÃO entra no escopo novo", () => {
 
     wsMock.ws.activeWorkspace = WS2;
     view.rerender(<TedChat />);
-    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledWith("ws-2"));
 
     flight.reject(new Error("ws-1 caiu"));
     await settle();
@@ -574,14 +534,6 @@ describe("TedChat — AC07: resultado tardio NÃO entra no escopo novo", () => {
  * (iii) durante o fetch da active-list dentro do `loadHistory`.
  */
 describe("TedChat — AC07 (HIGH): a troca de escopo em QUALQUER await da cadeia aborta a escrita", () => {
-  const ws1ActiveOp = {
-    id: "pending-ws1",
-    status: "proposed",
-    tool: "transactions.expense.create",
-    createdAt: "2026-09-14T10:00:00.000Z",
-    expiresAt: "2099-09-14T13:00:00.000Z",
-  };
-
   it("(i) troca durante o reconciliador financeiro: a continuação do turno antigo não escreve no chat novo", async () => {
     const user = userEvent.setup();
     histories["ws-1"] = [userMsg("ws1-msg", "conversa do ws 1")];
@@ -595,10 +547,10 @@ describe("TedChat — AC07 (HIGH): a troca de escopo em QUALQUER await da cadeia
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValueOnce({
       turnId: "t-ws1",
       status: "completed",
-      pendingOperation: {
-        id: "pending-ws1",
+      execution: {
+        operationId: "pending-ws1",
+        tool: "transactions.expense.create",
         status: "succeeded",
-        operation: "transactions.expense.create",
         receipt: {
           mutationId: "mut-ws1",
           mutationKind: "transactions.expense.create",
@@ -607,6 +559,7 @@ describe("TedChat — AC07 (HIGH): a troca de escopo em QUALQUER await da cadeia
           operationId: "pending-ws1",
           entity: { type: "transaction", id: "tx-ws1" },
         },
+        outcome: { status: "succeeded" },
       },
     } as agentClient.AgentTurn);
     await send(user, "Gastei R$ 50 no mercado");
@@ -652,28 +605,5 @@ describe("TedChat — AC07 (HIGH): a troca de escopo em QUALQUER await da cadeia
 
     expect(screen.queryByText("conversa do ws 1 (atrasada)")).toBeNull();
     expect(screen.getByText("conversa do ws 2")).toBeInTheDocument();
-  });
-
-  it("(iii) troca durante o fetch da active-list: cards do escopo antigo não entram no chat novo", async () => {
-    const user = userEvent.setup();
-    histories["ws-2"] = [];
-    const view = await renderReady();
-
-    // O histórico responde; a active-list de ws-1 fica pendente.
-    const activeFlight = deferred<agentClient.ActivePendingOperation[]>();
-    vi.mocked(agentClient.fetchActivePendingOperations).mockReturnValueOnce(activeFlight.promise);
-    await send(user, "Gastei R$ 50 no mercado");
-    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledTimes(2));
-
-    wsMock.ws.activeWorkspace = WS2;
-    view.rerender(<TedChat />);
-    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledWith("ws-2"));
-
-    activeFlight.resolve([ws1ActiveOp as agentClient.ActivePendingOperation]);
-    await settle();
-
-    // O card de aprovação de ws-1 nunca aparece no chat de ws-2.
-    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
-    expect(screen.queryByText(/Confirmar despesa/i)).toBeNull();
   });
 });

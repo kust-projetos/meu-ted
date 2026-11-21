@@ -11,31 +11,13 @@ import { useIsOverlayOpen } from "@/lib/ui/overlay-a11y";
  * navigates to the dedicated `/ted` page via `openTedChat()`; the launcher
  * owns the listener, so there is a single source of truth, no parallel event.
  *
- * T5.3 (SPEC §22): `openTedChat({ operationId })` deep-links the page chat
- * to ONE pending operation via `/ted?operationId=…`. The id is display
- * routing only — the Decision Service inside the chat still owns
- * confirm/cancel/retry.
  */
 export const OPEN_TED_CHAT_EVENT = "pwa:open-ted";
 
-export type OpenTedChatOptions = Readonly<{
-  /** Authoritative pending-operation id to focus once the chat page opens. */
-  operationId?: string;
-}>;
-
-type OpenTedChatDetail = OpenTedChatOptions | undefined;
-
-export function openTedChat(options?: OpenTedChatOptions): void {
+export function openTedChat(): void {
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent<OpenTedChatDetail>(OPEN_TED_CHAT_EVENT, { detail: options }));
+    window.dispatchEvent(new Event(OPEN_TED_CHAT_EVENT));
   }
-}
-
-function readFocusedOperationId(event: Event): string | null {
-  const detail = (event as CustomEvent<OpenTedChatDetail>).detail;
-  return typeof detail?.operationId === "string" && detail.operationId.length > 0
-    ? detail.operationId
-    : null;
 }
 
 export function TedChatLauncher() {
@@ -47,11 +29,8 @@ export function TedChatLauncher() {
   const overlayOpen = useIsOverlayOpen();
 
   useEffect(() => {
-    function handler(event: Event) {
-      const operationId = readFocusedOperationId(event);
-      router.push(
-        operationId ? `/ted?operationId=${encodeURIComponent(operationId)}` : "/ted",
-      );
+    function handler() {
+      router.push("/ted");
     }
     window.addEventListener(OPEN_TED_CHAT_EVENT, handler);
     return () => window.removeEventListener(OPEN_TED_CHAT_EVENT, handler);

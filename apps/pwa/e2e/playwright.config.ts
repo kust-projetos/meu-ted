@@ -37,72 +37,16 @@ const P2D = process.env.P2D_BROWSER === "1";
 const LIVE_PREP = process.env.P2D_LIVE_PREP === "1";
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
-const EXPENSE_REAL = process.env.P2D_EXPENSE_REAL === "1";
-const FINANCE_INTERPRETATION_REAL = process.env.P2D_FINANCE_INTERPRETATION_REAL === "1";
-const CATEGORY_CORRECTION_REAL = process.env.P2D_CATEGORY_CORRECTION_REAL === "1";
-// P3 proposal slices: gateway + Pending V2 + scripted propose_expense
-// (P3.1), propose_income (P3.2), propose_transfer (P3.3), propose_card_purchase
-// 1x (P3.4) or with installments (P3.5). They reuse the synthetic stack and
-// never carry a real credential.
-const EXPENSE = process.env.P2D_EXPENSE === "1";
-const INCOME = process.env.P2D_INCOME === "1";
-const CARD = process.env.P2D_CARD === "1";
-const CARD_INSTALLMENTS = process.env.P2D_CARD_INSTALLMENTS === "1";
-const TRANSFER = process.env.P2D_TRANSFER === "1";
-const STATEMENT_PAY = process.env.P2D_STATEMENT_PAY === "1";
-const P3_PILOT = process.env.P2D_P3_PILOT === "1";
-const P38_CARD_SMOKE = process.env.P2D_P38_CARD_SMOKE === "1";
-if ((EXPENSE_REAL || FINANCE_INTERPRETATION_REAL || CATEGORY_CORRECTION_REAL) && (!LIVE_REAL || P3_PILOT || P38_CARD_SMOKE || [EXPENSE_REAL, FINANCE_INTERPRETATION_REAL, CATEGORY_CORRECTION_REAL].filter(Boolean).length > 1 || [EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].some(Boolean))) {
-  throw new Error("P2D_EXPENSE_REAL requires P2D_LIVE_REAL and is exclusive with other P2D expense slices");
-}
-if (P3_PILOT && ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY, LIVE_PREP, OFFLINE_CHAT, P38_CARD_SMOKE].some(Boolean))) {
-  throw new Error("P2D_P3_PILOT is mutually exclusive with P3 slices, LIVE_PREP, OFFLINE_CHAT and P2D_P38_CARD_SMOKE");
-}
-if (P38_CARD_SMOKE && !LIVE_REAL) {
-  throw new Error("P2D_P38_CARD_SMOKE requires P2D_LIVE_REAL (fail-closed)");
-}
-if ([EXPENSE, INCOME, CARD, CARD_INSTALLMENTS, TRANSFER, STATEMENT_PAY].filter(Boolean).length > 1) {
-  throw new Error(
-    "select at most one P3 proposal slice (P2D_EXPENSE|P2D_INCOME|P2D_CARD|P2D_CARD_INSTALLMENTS|P2D_TRANSFER|P2D_STATEMENT_PAY)",
-  );
-}
 if ([LIVE_PREP, OFFLINE_CHAT, LIVE_REAL].filter(Boolean).length > 1) {
   throw new Error("select at most one P2D live mode (P2D_LIVE_PREP|P2D_OFFLINE_CHAT|P2D_LIVE_REAL)");
 }
 const P2D_LIVE_MODE = LIVE_PREP || OFFLINE_CHAT || LIVE_REAL;
-const PROPOSAL = P3_PILOT || P38_CARD_SMOKE || EXPENSE || EXPENSE_REAL || CATEGORY_CORRECTION_REAL || INCOME || CARD || CARD_INSTALLMENTS || TRANSFER || STATEMENT_PAY;
-const P2D_ACTIVE = P2D || P2D_LIVE_MODE || PROPOSAL;
+const P2D_ACTIVE = P2D || P2D_LIVE_MODE;
 const P2D_SPEC = LIVE_PREP
   ? "**/p2d/p2d-live-prep.spec.ts"
   : OFFLINE_CHAT
     ? "**/p2d/p2d-live-offline.spec.ts"
-      : LIVE_REAL
-        ? CATEGORY_CORRECTION_REAL
-          ? "**/p2d/p5-category-correction-real.spec.ts"
-          : EXPENSE_REAL
-          ? "**/p2d/p3-expense-real.spec.ts"
-          : FINANCE_INTERPRETATION_REAL
-            ? "**/p2d/p4-interpretation-real.spec.ts"
-          : P3_PILOT
-          ? "**/p2d/p3-integrated-real.spec.ts"
-          : P38_CARD_SMOKE
-            ? "**/p2d/p3-card-discovery-smoke.spec.ts"
-            : "**/p2d/p2d-live-real.spec.ts"
-      : P3_PILOT
-        ? "**/p2d/p3-integrated.spec.ts"
-      : STATEMENT_PAY
-        ? "**/p2d/p3-statement-payment.spec.ts"
-      : CARD_INSTALLMENTS
-        ? "**/p2d/p3-installments.spec.ts"
-      : CARD
-        ? "**/p2d/p3-card-purchase.spec.ts"
-      : TRANSFER
-        ? "**/p2d/p3-transfer.spec.ts"
-        : INCOME
-          ? "**/p2d/p3-income.spec.ts"
-          : EXPENSE
-            ? "**/p2d/p3-expense.spec.ts"
-            : "**/p2d/*.spec.ts";
+    : "**/p2d/p2d-live-real.spec.ts";
 // Fail-closed, unconditionally: Playwright starts and cleans up its own
 // servers per run and never attaches to a pre-existing (possibly alien)
 // process. There is no ownership flag and no reuse pathway.
@@ -125,11 +69,6 @@ if (P2D_LIVE_MODE) {
     offlineChat: OFFLINE_CHAT,
     liveReal: LIVE_REAL,
   });
-  if (LIVE_REAL && P3_PILOT) clean.P2D_P3_PILOT = "1";
-  if (LIVE_REAL && P38_CARD_SMOKE) clean.P2D_P38_CARD_SMOKE = "1";
-  if (LIVE_REAL && EXPENSE_REAL) clean.P2D_EXPENSE_REAL = "1";
-  if (LIVE_REAL && CATEGORY_CORRECTION_REAL) clean.P2D_CATEGORY_CORRECTION_REAL = "1";
-  if (LIVE_REAL && FINANCE_INTERPRETATION_REAL) clean.P2D_FINANCE_INTERPRETATION_REAL = "1";
   for (const key of Object.keys(process.env)) delete process.env[key];
   Object.assign(process.env, clean);
 }
@@ -290,12 +229,11 @@ export default defineConfig({
   ],
 
   webServer: PRODUCTION_SMOKE ? undefined : [
-    // Any live-mode opt-in (P2D_LIVE_PREP / P2D_OFFLINE_CHAT / P2D_LIVE_REAL)
-    // and the P3 proposal slices skip the historical topology (fixture API,
+    // Any P2D mode skips the historical topology (fixture API,
     // standalone Next, SW harness) so ONLY the P2D webServers below run — no
     // extra servers, no prebuilt .next/standalone dependency. Untouched when
-    // no flag is set, including P2D_BROWSER=1 alone.
-    ...(!P2D_LIVE_MODE && !PROPOSAL
+    // no flag is set.
+    ...(!P2D_ACTIVE
       ? [
           {
             command: `pnpm exec tsx e2e/fixture-api/server.ts --port ${FIXTURE_PORT}`,
@@ -362,16 +300,6 @@ export default defineConfig({
               P2D_NEXT_PORT: String(p2dPorts.nextPort),
               ...(OFFLINE_CHAT ? { P2D_OFFLINE_CHAT: "1" } : {}),
               ...(LIVE_REAL ? { P2D_LIVE_REAL: "1" } : {}),
-              ...(EXPENSE ? { P2D_EXPENSE: "1" } : {}),
-              ...(INCOME ? { P2D_INCOME: "1" } : {}),
-              ...(CARD ? { P2D_CARD: "1" } : {}),
-              ...(CARD_INSTALLMENTS ? { P2D_CARD_INSTALLMENTS: "1" } : {}),
-              ...(TRANSFER ? { P2D_TRANSFER: "1" } : {}),
-              ...(STATEMENT_PAY ? { P2D_STATEMENT_PAY: "1" } : {}),
-              ...(P3_PILOT ? { P2D_P3_PILOT: "1" } : {}),
-              ...(P38_CARD_SMOKE ? { P2D_P38_CARD_SMOKE: "1" } : {}),
-              ...(CATEGORY_CORRECTION_REAL ? { P2D_CATEGORY_CORRECTION_REAL: "1" } : {}),
-              ...(FINANCE_INTERPRETATION_REAL ? { P2D_FINANCE_INTERPRETATION_REAL: "1" } : {}),
             },
           },
           {

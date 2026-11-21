@@ -10,7 +10,7 @@
  * Pure string helpers (no React) so next.config.ts can import this module.
  */
 
-export const COMPROMISSOS_ABAS = ["a-pagar", "pendencias"] as const;
+export const COMPROMISSOS_ABAS = ["a-pagar"] as const;
 export type CompromissosAba = (typeof COMPROMISSOS_ABAS)[number];
 
 export const PATRIMONIO_ABAS = ["contas", "cartoes", "patrimonio"] as const;
@@ -57,7 +57,7 @@ export interface CanonicalRedirect {
  */
 export const CANONICAL_REDIRECTS: CanonicalRedirect[] = [
   { source: "/a-pagar", destination: "/compromissos?aba=a-pagar" },
-  { source: "/pending", destination: "/compromissos?aba=pendencias" },
+  { source: "/pending", destination: "/compromissos?aba=a-pagar" },
   { source: "/contas", destination: "/hub/patrimonio?aba=contas" },
   { source: "/cartoes", destination: "/hub/patrimonio?aba=cartoes" },
   { source: "/patrimonio", destination: "/hub/patrimonio?aba=patrimonio" },

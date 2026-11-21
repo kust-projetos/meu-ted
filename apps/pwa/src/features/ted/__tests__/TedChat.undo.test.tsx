@@ -35,7 +35,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     sendAgentMessage: vi.fn(),
     decideUndoProposal: vi.fn(),
   };
@@ -47,7 +46,6 @@ describe("TedChat undo proposal card (debt-undo-confirmation-ui)", () => {
     vi.clearAllMocks();
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
   });
 
   it("renders the undo card from the structured turn field and never from model text", async () => {

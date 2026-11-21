@@ -14,7 +14,7 @@ describe("TedChat – isolamento de histórico por workspace", () => {
     expect(content).toMatch(/activeWorkspace\?\.id/);
     // Deve limpar mensagens ao trocar
     expect(content).toMatch(/setMessages\(\[\]\)/);
-    expect(content).toMatch(/setPendingOps\(\[\]\)/);
+    expect(content).toMatch(/setUndoProposals\(\[\]\)/);
   });
 
   it("fetchAgentHistory é chamado com workspace isolado e loadHistory depende de activeWorkspace", () => {

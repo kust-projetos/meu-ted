@@ -38,6 +38,8 @@ Este diretório contém o registro imutável de decisões de arquitetura do proj
 | [ADR-030](ADR-030-ted-runtime-experiment.md) | Experimento de runtime conversacional dedicado (OpenCode V2 prioritário) | proposed | 2026-10-30 | — |
 | [ADR-031](ADR-031-ted-opencode-first.md) | OpenCode-first como núcleo conversacional (sem autorizar produção) | accepted (direção); implementação P2 parcial | 2026-10-31 | SELECT_B |
 | [ADR-032](ADR-032-ted-269-live-delivery-contract.md) | Contrato de entrega por ator do live-sync (TED #269) | decisão aceita; C3 implementado; F1 provado em workerd; flag default-off; PWA sem cliente WS | 2026-11-12 | — |
+| [ADR-033](ADR-033-agente-confirma-pending-v2.md) | Confirmação de Pending V2 feita pelo agente TED | superseded by ADR-034 | 2026-11-20 | — |
+| [ADR-034](ADR-034-agente-executa-sem-aprovacao.md) | Agente TED executa sem aprovação (sem flag, sem card; undo mantido) | aceita na branch `feat/ted-remocao-completa-aprovacao`; sem deploy | 2026-11-21 | — |
 
 ## Template para Novos ADRs
 

@@ -38,9 +38,7 @@
 //      secrets, cookies, tokens, or prompt text.
 
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { openCategoryMemoryStore } from './category-memory-store.mjs';
-import { getCatalog } from './category-catalog.mjs';
 import {
   CONVERSATION_COOKIE_MAX_AGE,
   ConversationError,
@@ -58,24 +56,23 @@ import {
   createDiagnosticContext,
   defaultDiagnosticSink,
 } from './diagnostics.mjs';
-import { proposalIntentRegistry } from './proposal-intents.mjs';
+import { actionIntentRegistry } from './action-intents.mjs';
 import { createUndoStore } from './undo-store.mjs';
-import { proposeIdempotencyKey, PendingClientError } from './pending-client.mjs';
+import { PendingClientError } from './pending-client.mjs';
 import { attestEmptyWorkspace, WorkspaceAttestationError } from './workspace-attestation.mjs';
-import { correctionActionRegistry } from './correction-actions.mjs';
-import { projectActivePendingOperations } from './active-projection.mjs';
+import { undoActionRegistry } from './undo-actions.mjs';
 import {
-  createSelfConfirmExecutor,
+  createActionExecutor,
   isActionableAssurance,
   executionOutput,
-  SELF_CONFIRM_CLARIFICATION,
-  SELF_CONFIRM_NOT_ACTIONABLE,
-} from './self-confirm.mjs';
+  ACTION_CLARIFICATION,
+  ACTION_NOT_ACTIONABLE,
+} from './action-executor.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
 
-const ROUTE_RE = /^(?:\/api\/agent)?\/agents\/finance-chat-agent\/([^/]+)\/rpc\/(chat|history|session\/new|pending-operations\/propose|pending-operations\/active|pending-operations\/[^/]+\/decision|undo\/active|undo\/decision|workspace\/[^/]+\/attest-empty)$/;
+const ROUTE_RE = /^(?:\/api\/agent)?\/agents\/finance-chat-agent\/([^/]+)\/rpc\/(chat|history|session\/new|undo\/active|undo\/decision|workspace\/[^/]+\/attest-empty)$/;
 
 export function parseRoute(pathname) {
   const m = ROUTE_RE.exec(String(pathname || ''));
@@ -93,54 +90,6 @@ export function parseRoute(pathname) {
 function isLoopbackHost(host) {
   const h = String(host || '').replace(/^\[|\]$/g, '').toLowerCase();
   return h === '127.0.0.1' || h === '::1' || h === 'localhost';
-}
-
-const UUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-function validProposalArgs(tool, a) {
-  const fields = {
-    'transactions.expense.create': ['amountCents','description','date','accountId','categoryId'],
-    'transactions.income.create': ['amountCents','description','date','accountId','categoryId'],
-    'cards.purchase.create': ['amountCents','description','date','accountId','categoryId','installmentsTotal'],
-    'transactions.transfer.create': ['amountCents','description','date','fromAccountId','toAccountId'],
-    'cards.statement.pay': ['statementId','fromAccountId','amountCents'],
-    'accounts.create': ['name','kind','initialBalanceCents'],
-    'categories.create': ['name','kind','parentId'],
-    'transactions.update': ['transactionId','description','expectedDescription'],
-    'accounts.update': ['accountId','name','expectedName'],
-    'accounts.deactivate': ['accountId','accountName'],
-    'categories.update': ['categoryId','name','expectedName'],
-    'categories.deactivate': ['categoryId','expectedName'],
-    'payables.create': ['accountId','description','amountCents','dueDate','categoryId'],
-    'payables.pay': ['payableId','description','amountCents','dueDate','accountId','paidDate'],
-  }[tool];
-  if (!fields || !a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some((k) => !fields.includes(k))) return false;
-  const required = {
-    'transactions.expense.create': ['amountCents','description','date','accountId','categoryId'],
-    'transactions.income.create': ['amountCents','description','date','accountId','categoryId'],
-    'cards.purchase.create': ['amountCents','description','date','accountId'],
-    'transactions.transfer.create': ['amountCents','description','date','fromAccountId','toAccountId'],
-    'cards.statement.pay': ['statementId','fromAccountId','amountCents'],
-    'accounts.create': ['name','kind','initialBalanceCents'],
-    'categories.create': ['name','kind'],
-    'transactions.update': ['transactionId','description','expectedDescription'],
-    'accounts.update': ['accountId','name','expectedName'],
-    'accounts.deactivate': ['accountId'],
-    'categories.update': ['categoryId','name','expectedName'],
-    'categories.deactivate': ['categoryId','expectedName'],
-    'payables.create': ['accountId','description','amountCents','dueDate'],
-    'payables.pay': ['payableId','description','amountCents','dueDate','accountId'],
-  }[tool];
-  if (required.some((k) => a[k] === undefined || a[k] === null)) return false;
-  const uuidFields = ['accountId','categoryId','parentId','fromAccountId','toAccountId','statementId','transactionId','payableId'];
-  for (const key of uuidFields) if (a[key] !== undefined && !UUID_VALUE.test(a[key])) return false;
-  for (const key of ['date','dueDate','paidDate']) if (a[key] !== undefined && (typeof a[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(a[key]))) return false;
-  for (const key of ['amountCents','initialBalanceCents']) if (a[key] !== undefined && (!Number.isSafeInteger(a[key]) || (key === 'amountCents' ? a[key] <= 0 : Math.abs(a[key]) > 1_000_000_000_000))) return false;
-  for (const key of ['description','name','expectedName','expectedDescription','accountName']) if (a[key] !== undefined && (typeof a[key] !== 'string' || !a[key].trim() || a[key].length > (key.includes('escription') ? 240 : 120))) return false;
-  if (tool === 'transactions.transfer.create' && a.fromAccountId === a.toAccountId) return false;
-  if (tool === 'accounts.create' && (!['bank','cash'].includes(a.kind) || !Number.isSafeInteger(a.initialBalanceCents))) return false;
-  if (tool === 'categories.create' && !['expense','income'].includes(a.kind)) return false;
-  if (tool === 'cards.purchase.create' && a.installmentsTotal !== undefined && (!Number.isInteger(a.installmentsTotal) || a.installmentsTotal < 1 || a.installmentsTotal > 48 || a.installmentsTotal > a.amountCents)) return false;
-  return true;
 }
 
 function readBody(req, limit = GATEWAY_BODY_LIMIT_BYTES, signal = null) {
@@ -306,12 +255,8 @@ export function createGatewayServer({
   isSecureOrigin = () => false,
   requestTimeoutMs = GATEWAY_REQUEST_TIMEOUT_MS,
   diagnosticsSink = defaultDiagnosticSink,
-  proposalIntents = proposalIntentRegistry,
-  autoExecClient = null,
-  categoryAutoExecClient = null,
-  autoExecEnabled = false,
-  selfConfirmEnabled = false,
-  correctionActions = correctionActionRegistry,
+  actionIntents = actionIntentRegistry,
+  undoActions = undoActionRegistry,
   categoryMemoryDbPath,
   pendingClient = null,
   undoStore = null,
@@ -328,10 +273,7 @@ export function createGatewayServer({
   const categoryMemoryStore = categoryMemoryStoreOverride || (categoryMemoryEnabled ? openCategoryMemoryStore({ dbPath: categoryMemoryDbPath }) : null);
   const undoProposals = undoStore || createUndoStore({ persistDir: stateDir || process.cwd() });
   const turnIntentionBySession = new Map();
-  // S1: fail-closed by construction. Only a literal boolean true (the flag
-  // parse in main.mjs is strict '1') enables the same-turn confirm+execute.
-  const selfConfirm = selfConfirmEnabled === true;
-  const selfConfirmExecutor = createSelfConfirmExecutor({ client: pendingClient });
+  const actionExecutor = createActionExecutor({ client: pendingClient });
   void bindAuthenticatedSession; // legacy seam: accepted, never invoked (unsafe path retired)
   const hasSafeWrapper = typeof withAuthenticatedSession === 'function';
   function requireSafeWrapper() {
@@ -645,20 +587,9 @@ export function createGatewayServer({
                   }
                 }
                 record = store.noteTurn(record.conversationId);
-                let recoveredProposal = null;
-                if (autoExecEnabled) {
-                  const candidate = proposalIntents.peek(runtimeForRecovery);
-                  if (candidate && turnIntentionBySession.get(runtimeForRecovery) === body.intentionId) {
-                    recoveredProposal = proposalIntents.take(runtimeForRecovery);
-                  } else {
-                    proposalIntents.clear(runtimeForRecovery);
-                  }
-                }
+                actionIntents.clear(runtimeForRecovery);
                 turnIntentionBySession.delete(runtimeForRecovery);
-                return {
-                  turnId: recovered.turnId, output: recovered.output,
-                  ...(recoveredProposal ? { proposal: recoveredProposal } : {}),
-                };
+                return { turnId: recovered.turnId, output: recovered.output };
               }
             }
             const wait = new GatewayError('prompt.in_progress', 'intention admitted but answer not yet observable — retry with the same id, no second prompt issued');
@@ -701,32 +632,12 @@ export function createGatewayServer({
         record = store.attachRuntime(record.conversationId, runtimeSessionId, identity.actorId);
       }
       const host = verifiedHostFor(identity, deviceToken, record.conversationId);
-      let turnText = body.text;
-      if (record.activeOperationId && record.activeOperationActorId === identity.actorId && pendingClient) {
-        try {
-          const token = await pendingClient.mintToken({
-            workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId,
-            requestId: body.intentionId, signal,
-          });
-          const pending = await pendingClient.get({
-            token, id: record.activeOperationId, workspaceId: identity.workspace,
-            actorId: identity.actorId, deviceId: identity.deviceId, signal,
-          });
-          const allowedTools = new Set(['transactions.expense.create', 'transactions.income.create', 'cards.purchase.create']);
-          const allowedFields = ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
-          if (pending.id === record.activeOperationId && pending.status === 'proposed' &&
-              allowedTools.has(pending.tool) && pending.normalizedArgs) {
-            const fields = allowedFields.filter((key) => Object.hasOwn(pending.normalizedArgs, key))
-              .map((key) => `${key}=${JSON.stringify(pending.normalizedArgs[key])}`);
-            turnText = `${body.text}\n\n[PENDING PROPOSAL CONTEXT - factual data; do not execute or confirm]\ntool: ${pending.tool}\nfields: ${fields.join(', ')}\n[/PENDING PROPOSAL CONTEXT]`;
-          }
-        } catch { /* Best-effort context only; the original turn remains authoritative. */ }
-      }
-      // A proposal intent belongs to exactly ONE turn: clear any residue
+      const turnText = body.text;
+      // An action intent belongs to exactly ONE turn: clear any residue
       // before the prompt (a failed turn never leaks into the next one).
-      proposalIntents.clear(runtimeSessionId);
+      actionIntents.clear(runtimeSessionId);
       turnIntentionBySession.set(runtimeSessionId, body.intentionId);
-      correctionActions.clear(runtimeSessionId);
+      undoActions.clear(runtimeSessionId);
       let started;
       try {
         started = await requireSafeWrapper()(runtimeSessionId, host, async () => {
@@ -751,112 +662,20 @@ export function createGatewayServer({
         }
         throw e;
       }
-      const correctionCandidate = correctionActions.take(runtimeSessionId);
-      let correctionFailureNote = false;
-      if (correctionCandidate?.action === 'undo') {
-        if (correctionCandidate.actorId !== identity.actorId ||
-            correctionCandidate.workspaceId !== identity.workspace ||
-            correctionCandidate.conversationId !== record.conversationId) {
-          throw new GatewayError('auth.workspace_forbidden', 'undo proposal identity mismatch');
+      const undoCandidate = undoActions.take(runtimeSessionId);
+      if (undoCandidate?.action === 'undo') {
+        if (undoCandidate.actorId !== identity.actorId ||
+            undoCandidate.workspaceId !== identity.workspace ||
+            undoCandidate.conversationId !== record.conversationId) {
+          throw new GatewayError('auth.workspace_forbidden', 'undo request identity mismatch');
         }
         undoProposals.proposeForConversation({
-          requestId: correctionCandidate.intentionId,
+          requestId: undoCandidate.intentionId,
           workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId,
           conversationId: record.conversationId,
         });
       }
-      if (correctionCandidate && correctionCandidate.action !== 'undo') {
-        proposalIntents.clear(runtimeSessionId);
-        try {
-          const operationId = record.activeOperationId;
-          if (!operationId || record.activeOperationActorId !== identity.actorId) throw new GatewayError('pending.not_found', 'no pending proposal in this conversation');
-          if (!pendingClient) throw new GatewayError('pending.unavailable', 'pending proposal service unavailable');
-          const token = await pendingClient.mintToken({ workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, requestId: body.intentionId, signal });
-          if (correctionCandidate.action === 'cancel') {
-            await pendingClient.cancel({ token, id: operationId, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
-            record = store.setActiveOperation(record.conversationId, null);
-          } else {
-            const old = await pendingClient.get({ token, id: operationId, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
-            if (old.status !== 'proposed') throw new GatewayError('pending.not_proposed', 'pending proposal is no longer editable');
-            const merged = { ...old.normalizedArgs, ...correctionCandidate.changed };
-            const allowed = new Set({
-              'transactions.expense.create':['amountCents','description','date','accountId','categoryId'], 'transactions.income.create':['amountCents','description','date','accountId','categoryId'],
-              'cards.purchase.create':['amountCents','description','date','accountId','categoryId','installmentsTotal'],
-            }[old.tool] || []);
-            if (!allowed.size || Object.keys(merged).some(k => !allowed.has(k))) throw new GatewayError('pending.invalid_proposal', 'pending proposal cannot be corrected');
-            const { validateToolArgs } = await import('./tool-defs.mjs');
-            const runtimeTool = old.tool === 'transactions.expense.create' ? 'propose_expense' : old.tool === 'transactions.income.create' ? 'propose_income' : 'propose_card_purchase';
-            const normalizedArgs = validateToolArgs(runtimeTool, merged);
-            for (const key of ['description','date']) if (typeof normalizedArgs[key] === 'string') normalizedArgs[key] = normalizedArgs[key].trim();
-            const { createHash } = await import('node:crypto');
-            const idempotencyKey = createHash('sha256').update(`${identity.workspace}:${body.intentionId}:${old.tool}`).digest('hex');
-            const revised = await pendingClient.supersede({ token, id: operationId, tool: old.tool, normalizedArgs, expectedProposalHash: old.proposalHash, idempotencyKey, workspaceId: identity.workspace, actorId: identity.actorId, deviceId: identity.deviceId, signal });
-            record = store.setActiveOperation(record.conversationId, revised.id, identity.actorId);
-            if (correctionCandidate.changed.categoryId && categoryMemoryStore) {
-              try {
-                const categoryName = getCatalog(runtimeSessionId)?.find((category) => category.id === correctionCandidate.changed.categoryId)?.name;
-                if (!(typeof categoryName === 'string' && categoryName.trim())) {
-                  console.warn('category memory skipped: category not in session catalog');
-                }
-                if (typeof categoryName === 'string' && categoryName.trim()) {
-                  const saved = categoryMemoryStore.remember({ workspaceId:identity.workspace, actorId:identity.actorId, target: normalizedArgs.description || normalizedArgs.name || record.conversationId, field:'category', value:categoryName });
-                  console.warn('category memory remember:', saved ? 'saved' : 'not_saved');
-                }
-              } catch (memoryError) { console.warn('category memory error:', memoryError?.code || memoryError?.name || 'unknown'); }
-            }
-          }
-        } catch (e) {
-          if (e?.code === 'pending.not_found') {
-            // The model response is still valid; no correction target exists.
-          } else {
-            correctionFailureNote = true;
-          }
-          if (hasIntentions && started && typeof started.userMessageId === 'string') {
-            store.settleIntention(record.conversationId, body.intentionId, {
-              status: 'completed', userMessageId: started.userMessageId, actorId: identity.actorId,
-              ...(typeof started.turnId === 'string' ? { turnId: started.turnId } : {}),
-            });
-          }
-        }
-      }
-      let proposalForAutoexec = null;
-      let canAutoexec = false;
-      let proposalObserved = false;
-      // Self-confirm owns the whole propose_* family (category creation
-      // included) — never let the legacy scoped autoexec spend the same intent.
-      if (autoExecEnabled && !selfConfirm && pin.pin === 'b' && !correctionCandidate) {
-        proposalForAutoexec = proposalIntents.peek(runtimeSessionId);
-        proposalObserved = !!proposalForAutoexec;
-        if (proposalForAutoexec) {
-          const { isAutoEligibleCategoryIntent } = await import('./category-autoexec.mjs');
-          canAutoexec = isAutoEligibleCategoryIntent(proposalForAutoexec);
-        }
-      }
-      if (hasIntentions && canAutoexec) {
-        // Record the admitted native message while keeping the intention
-        // pending, so a disconnected autoexec can recover history by the same
-        // intentionId without issuing a second prompt.
-        store.settleIntention(record.conversationId, body.intentionId, {
-          status: 'pending', actorId: identity.actorId,
-          ...(started && typeof started.turnId === 'string' ? { turnId: started.turnId } : {}),
-          ...(started && typeof started.userMessageId === 'string' ? { userMessageId: started.userMessageId } : {}),
-        });
-      }
-      let autoexecResult = null;
-      if (canAutoexec && categoryAutoExecClient) {
-        const { tryAutoCreateCategory } = await import('./category-autoexec.mjs');
-        autoexecResult = await tryAutoCreateCategory({
-          client: categoryAutoExecClient, identity, intentionId: body.intentionId,
-          intent: proposalForAutoexec, signal, budgetMs: Math.max(1, Math.min(12_000, requestDeadline - Date.now() - 250)),
-        });
-        // A caller disconnect/outer request timeout leaves both the
-        // intention and proposal untouched for same-id recovery.
-        if (signal.aborted) {
-          const interrupted = new GatewayError('gateway.upstream_error', 'request interrupted during autoexec; retry with the same id');
-          interrupted.code = 'gateway.upstream_error';
-          throw interrupted;
-        }
-      }
+      let actionObserved = false;
       if (hasIntentions) {
         try {
           store.settleIntention(record.conversationId, body.intentionId, {
@@ -886,72 +705,43 @@ export function createGatewayServer({
       }
       turnIntentionBySession.delete(runtimeSessionId);
       record = store.noteTurn(record.conversationId);
-      // Hand the intent off exactly once, on a settled successful turn.
-      // Flag OFF (default): the PWA POSTs it to the Agent broker; the gateway
-      // never mints, never confirms, never executes — byte-identical to before.
-      // Flag ON + favorable assurance: mint → propose → confirm → execute →
-      // outcome in this same turn, with an `execution` receipt instead of an
-      // actionable card. No attestation is ever exposed.
-      const proposalIntent = proposalIntents.take(runtimeSessionId);
-      proposalObserved = proposalObserved || !!proposalIntent;
-      let deliveredProposal = proposalIntent;
-      let autoexec;
-      let executedOutput = null;
+      // Every recorded action is executed in this same turn (unconditional).
+      // Favorable assurance is required: anything else becomes a text question.
+      // An actionable-card response is never emitted; unverified outcomes are
+      // never promoted to success.
+      const actionIntent = actionIntents.take(runtimeSessionId);
+      actionObserved = !!actionIntent;
+      let clarification = null;
       let execution = null;
-      let selfConfirmNote = null;
-      if (selfConfirm && proposalIntent && !correctionCandidate) {
-        if (!isActionableAssurance(proposalIntent.assurance)) {
-          // Missing/malformed/unfavorable declaration: no pipeline, no card,
-          // no false success — ask in text for the missing/ambiguous datum.
-          deliveredProposal = null;
-          selfConfirmNote = SELF_CONFIRM_CLARIFICATION;
+      let executedOutput = null;
+      if (actionIntent) {
+        if (!isActionableAssurance(actionIntent.assurance)) {
+          clarification = ACTION_CLARIFICATION;
         } else {
-          const result = await selfConfirmExecutor.run({
+          const result = await actionExecutor.run({
             identity: {
               workspaceId: identity.workspace,
               actorId: identity.actorId,
               deviceId: identity.deviceId,
             },
             intentionId: body.intentionId,
-            intent: proposalIntent,
+            intent: actionIntent,
             signal,
           });
-          if (result.kind === 'not_actionable') {
-            // 409 approval.not_actionable: no operation was created; fall
-            // back to a text clarification, never claim execution.
-            deliveredProposal = null;
-            selfConfirmNote = SELF_CONFIRM_NOT_ACTIONABLE;
-          } else if (result.kind === 'execution') {
+          if (result.kind === 'execution') {
             execution = result.execution;
-            deliveredProposal = null;
-            executedOutput = executionOutput(execution.status, proposalIntent.summary);
+            executedOutput = executionOutput(execution.status, actionIntent.summary);
+          } else if (result.kind === 'not_actionable') {
+            clarification = ACTION_NOT_ACTIONABLE;
           } else {
-            // Pipeline unavailable/errored before execute: never a card that
-            // looks executed and never a success claim — ask the user.
-            deliveredProposal = null;
-            selfConfirmNote = SELF_CONFIRM_CLARIFICATION;
+            clarification = ACTION_CLARIFICATION;
           }
         }
       }
-      if (autoexecResult?.status === 'executed') {
-          autoexec = { status: 'executed' };
-          deliveredProposal = null;
-          // The model text was written before execution ("proposta pendente");
-          // state the real outcome instead of leaving a contradiction.
-          executedOutput = `Categoria "${proposalForAutoexec.normalizedArgs.name}" criada.`;
-       } else if (autoexecResult?.reason === 'uncertain') {
-         autoexec = { status: 'uncertain' };
-       } else if (autoexecResult) {
-         autoexec = { status: 'left_pending', reason: autoexecResult.reason };
-       }
-      if (autoexecResult && autoexecResult.status !== 'executed') {
-        // Reason code only (closed enum); no ids, args or credentials.
-        console.warn('category autoexec left pending:', autoexecResult.reason || 'unknown');
-      }
-      return { ...started, ...(executedOutput ? { output: executedOutput } : {}), proposalObserved,
-        ...(selfConfirmNote ? { output: `${started.output || ''}\n\n${selfConfirmNote}`.trim() } : {}),
-        ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
-        ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}),
+      const output = clarification
+        ? `${started.output || ''}\n\n${clarification}`.trim()
+        : (executedOutput || started.output);
+      return { ...started, ...(output === undefined ? {} : { output }), actionObserved,
         ...(execution ? { execution } : {}) };
     }).catch((e) => ({ __error: e }));
 
@@ -980,9 +770,7 @@ export function createGatewayServer({
         intentionId: body.intentionId,
         status: 'completed',
         output: outcome.output,
-        proposalObserved: outcome.proposalObserved,
-        ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
-        ...(outcome.autoexec ? { autoexec: outcome.autoexec } : {}),
+        actionObserved: outcome.actionObserved,
         ...(outcome.execution ? { execution: outcome.execution } : {}),
       },
       setCookie: pin.pin === 'b' ? null : record.conversationId,
@@ -1246,81 +1034,14 @@ export function createGatewayServer({
           if (!pendingClient) throw new PendingClientError('pending.unavailable');
           return pendingClient[name]({ ...runtimeIdentity, ...input, signal });
         };
-        const routeMatch = route.match(/^pending-operations\/([^/]+)\/decision$/);
-        if (route.startsWith('pending-operations/') || route.startsWith('undo/') || route.startsWith('workspace/')) {
+        if (route.startsWith('undo/') || route.startsWith('workspace/')) {
           const expectedMethod = route.endsWith('/active') ? 'GET' : 'POST';
           if (req.method !== expectedMethod) {
             sendJson(res, 405, { code: 'gateway.invalid_args', message: `route requires ${expectedMethod}` });
             cleanup(); return;
           }
           try {
-            if (route === 'pending-operations/active') {
-              const token = await mint(randomUUID());
-              sendJson(res, 200, projectActivePendingOperations(await apiCall('active', { token })));
-            } else if (route === 'pending-operations/propose') {
-              const body = await requestJson();
-              const tools = new Set(['transactions.expense.create','transactions.income.create','cards.purchase.create','transactions.transfer.create','cards.statement.pay','accounts.create','categories.create','transactions.update','accounts.update','accounts.deactivate','categories.update','categories.deactivate','payables.create','payables.pay']);
-              if (!exactKeys(body, ['tool','intentionId','normalizedArgs']) || !tools.has(body.tool) ||
-                  typeof body.intentionId !== 'string' || body.intentionId.trim().length < 1 || body.intentionId.length > 128 ||
-                  !body.normalizedArgs || typeof body.normalizedArgs !== 'object' || Array.isArray(body.normalizedArgs) ||
-                  !validProposalArgs(body.tool, body.normalizedArgs)) {
-                throw new GatewayError('gateway.invalid_args', 'invalid proposal intent');
-              }
-              const token = await mint(body.intentionId);
-              const result = await apiCall('propose', { token, tool: body.tool, intentionId: body.intentionId,
-                normalizedArgs: body.normalizedArgs, idempotencyKey: proposeIdempotencyKey({ workspaceId, intentionId: body.intentionId, tool: body.tool }) });
-              const proposalPin = parseConversationCookie(req.headers.cookie);
-              if (proposalPin.pin === 'b') {
-                try {
-                  const conversation = store.get(proposalPin.conversationId, identity);
-                  await store.withTurnLock(conversation.conversationId, async () => store.setActiveOperation(conversation.conversationId, result.id, identity.actorId));
-                } catch (e) { console.warn('pending metadata divergence after propose', e?.code || 'store_error'); }
-              }
-              sendJson(res, 200, { id: result.id, existing: result.existing });
-            } else if (routeMatch) {
-              let operationId;
-              try { operationId = decodeURIComponent(routeMatch[1]); }
-              catch { throw new GatewayError('gateway.invalid_args', 'malformed operation id'); }
-              const body = await requestJson();
-              if (!exactKeys(body, ['decision','requestId']) || !['confirm','cancel','retry'].includes(body.decision) || typeof body.requestId !== 'string' || !body.requestId.trim() || body.requestId.length > 240) throw new GatewayError('gateway.invalid_args', 'invalid pending decision');
-              const token = await mint(body.requestId);
-              if (body.decision === 'cancel') {
-                const result = await apiCall('cancel', { token, id: operationId });
-                const conversationPin = parseConversationCookie(req.headers.cookie);
-                if (conversationPin.pin === 'b') {
-                  try {
-                    const conversation = store.get(conversationPin.conversationId, identity);
-                    if (conversation.activeOperationId === operationId) {
-                      await store.withTurnLock(conversation.conversationId, async () =>
-                        store.setActiveOperation(conversation.conversationId, null));
-                    }
-                  } catch (e) { console.warn('pending metadata divergence after cancel', e?.code || 'store_error'); }
-                }
-                sendJson(res, 200, { operationId, status: result.status || 'cancelled' });
-              } else {
-                let transition;
-                try {
-                  transition = body.decision === 'confirm'
-                    ? await apiCall('confirm', { token, id: operationId, intentionId: body.requestId })
-                    : await apiCall('retry', { token, id: operationId, intentionId: body.requestId });
-                } catch { /* replay/outcome below is authoritative, even after 4xx */ }
-                if (transition && typeof transition.attestation === 'string' && transition.attestation.length >= 32) {
-                  try { await apiCall('execute', { token, id: operationId, attestation: transition.attestation, intentionId: body.requestId }); } catch { /* read canonical outcome */ }
-                }
-                try {
-                  const outcome = await apiCall('outcome', { token, id: operationId });
-                  const status = outcome.status;
-                  const allowed = new Set(['proposed', 'succeeded', 'failed', 'cancelled', 'expired']);
-                  if (!allowed.has(status) || (status === 'succeeded' && !outcome.receipt)) throw new Error('uncertain outcome');
-                  sendJson(res, 200, { operationId, status,
-                    ...(typeof outcome.retryable === 'boolean' ? { retryable: outcome.retryable } : {}),
-                    ...(outcome.failureCode === 'in_use' ? { failureCode: 'in_use' } : {}),
-                    ...(status === 'succeeded' ? { receipt: outcome.receipt } : {}) });
-                } catch {
-                  sendJson(res, 502, { code: 'agent.execution_outcome_unknown', message: 'Não foi possível confirmar o resultado agora.' });
-                }
-              }
-            } else if (route === 'undo/active') {
+if (route === 'undo/active') {
               sendJson(res, 200, undoProposals.active(runtimeIdentity));
             } else if (route === 'undo/decision') {
               const body = await requestJson();

@@ -1,25 +1,23 @@
-// TED agent self-confirm (S1 — runtime only).
+// TED action executor (runtime only, unconditional).
 //
-// The gateway may confirm + execute a Pending V2 proposal inside the SAME chat
-// turn, but only when ALL of the following hold:
-//   1. the operator explicitly enabled TED_AGENT_SELF_CONFIRM=1 (strict parse,
-//      default OFF — fail closed everywhere else);
-//   2. the agent declared a favorable `assurance` on the propose_* tool call;
-//   3. the API accepted the proposal as actionable (no 409 approval.not_actionable).
-// The attestation minted by confirm is a one-use capability: it NEVER leaves
-// this module. The public `execution` shape is receipt/outcome only, and an
-// uncertain/unverified outcome is never promoted to `succeeded`.
+// The gateway executes a recorded action inside the SAME chat turn, but only
+// when the agent declared a favorable `assurance`. Missing/malformed/unfavorable
+// assurance, a 409 not_actionable, or any pipeline error becomes a text question:
+// never a card and never a false success. The attestation minted by confirm is a
+// one-use capability: it NEVER leaves this module. The public `execution` shape
+// is receipt/outcome only, and an uncertain/unverified outcome is never promoted
+// to `succeeded`.
 //
-// No money is moved here directly: every step goes through the existing
-// Pending V2 pipeline (pending-client.mjs) with the same delegated identity and
-// the same derive-from-intentionId Idempotency-Key the other paths use.
+// No money is moved here directly: every step goes through the existing Pending
+// V2 pipeline (pending-client.mjs) with the same delegated identity and the same
+// derive-from-intentionId Idempotency-Key.
 
 import { proposeIdempotencyKey } from './pending-client.mjs';
 
 export const ASSURANCE_KEYS = Object.freeze(['complete', 'ambiguousEntity', 'explicitIntent']);
 
-// Shared with every propose_* tool input schema. Optional: with the flag OFF
-// the old intent-only card flow is byte-identical and needs no assurance.
+// Shared with every action tool input schema. A missing declaration is never
+// actionable: the gateway asks the user in text instead.
 // Kept deliberately MINIMAL: OpenCode 2.2.4's tool-schema bridge stalls the
 // native prompt loop when a nested object carries `description`, `required` or
 // `additionalProperties` (proven by tests/p3-propose-loop.test.mjs). Field
@@ -33,17 +31,6 @@ export const ASSURANCE_SCHEMA = {
     explicitIntent: { type: 'boolean' },
   },
 };
-
-// Strict parse, identical to the other runtime flags: ONLY the literal '1'
-// enables it; absent, '0', 'true', numbers, non-objects and throws stay OFF.
-export function isSelfConfirmEnabled(env = process.env) {
-  try {
-    if (!env || typeof env !== 'object') return false;
-    return env.TED_AGENT_SELF_CONFIRM === '1';
-  } catch {
-    return false;
-  }
-}
 
 // Returns a frozen-shape canonical copy, or null when the declaration is
 // missing/malformed. Malformed means: not a plain object, wrong key count,
@@ -69,9 +56,9 @@ export function isActionableAssurance(value) {
   return !!a && a.complete === true && a.ambiguousEntity === false && a.explicitIntent === true;
 }
 
-export const SELF_CONFIRM_CLARIFICATION =
+export const ACTION_CLARIFICATION =
   'Não tenho dados suficientes para concluir com segurança. Pode esclarecer o(s) dado(s) faltante(s) ou ambíguo(s)?';
-export const SELF_CONFIRM_NOT_ACTIONABLE =
+export const ACTION_NOT_ACTIONABLE =
   'Não consegui concluir automaticamente porque a operação não pôde ser apresentada com segurança. Pode esclarecer os dados?';
 
 function isNotActionable(error) {
@@ -119,7 +106,7 @@ export function executionOutput(status, summary) {
 // same intention NEVER runs mint/propose/confirm/execute/outcome twice, even if
 // a caller somehow reaches this seam again. The turn-level intention registry
 // is the outer guard; this map is defense in depth.
-export function createSelfConfirmExecutor({ client = null } = {}) {
+export function createActionExecutor({ client = null } = {}) {
   const byIntention = new Map();
 
   async function run({ identity, intentionId, intent, signal } = {}) {

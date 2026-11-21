@@ -70,20 +70,9 @@ describe("TedChatLauncher Component (page navigation)", () => {
     render(<TedChatLauncher />);
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent(OPEN_TED_CHAT_EVENT));
+      window.dispatchEvent(new Event(OPEN_TED_CHAT_EVENT));
     });
     expect(navigation.push).toHaveBeenCalledWith("/ted");
-  });
-
-  it("navigates to /ted?operationId= when the event carries an operationId", async () => {
-    render(<TedChatLauncher />);
-
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent(OPEN_TED_CHAT_EVENT, { detail: { operationId: "op-9" } }),
-      );
-    });
-    expect(navigation.push).toHaveBeenCalledWith("/ted?operationId=op-9");
   });
 
   it("hides the FAB on /ted", () => {
