@@ -1,6 +1,8 @@
 # TED: confirmação feita pelo agente (sem card de aprovação)
 
-Data: 2026-11-20. Status: em implementação (branch `feat/ted-agent-self-confirm`).
+Data: 2026-11-20. Status: **encerrado / superseded em 2026-11-21** pela remoção completa da aprovação ([ADR-034](../../adr/ADR-034-agente-executa-sem-aprovacao.md)); registro histórico.
+
+> **Nota de status (2026-11-21):** este plano descreve a introdução de `TED_AGENT_SELF_CONFIRM` e do fallback com card Confirmar/Cancelar. A direção vigente, na branch `feat/ted-remocao-completa-aprovacao` (sem deploy), não tem flag nem card: as tools de ação executam diretamente quando a declaração de completude é favorável; na dúvida, o agente pergunta em texto. Pending V2 permanece apenas como motor interno server-side e o `undo` continua como rede de segurança. O rollback passou a ser o redeploy da imagem `ted-runtime:rollback-pre-<sha>`. As fatias e pendências abaixo são históricas e não descrevem o estado atual.
 
 ## Objetivo
 Remover o passo de aprovação manual do usuário (card Confirmar/Cancelar). O agente TED

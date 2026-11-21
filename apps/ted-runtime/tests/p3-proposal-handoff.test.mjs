@@ -1,17 +1,18 @@
-// P3 proposal handoff RED: the gateway attaches the native tool's proposal
-// intent to the successful turn DTO exactly once; a failed turn never leaks it
-// into the next one; two conversations never cross intents.
+// Action handoff: the gateway consumes the native tool's action intent in the
+// SAME turn. There is no actionable card: bad/missing assurance or an
+// unavailable pipeline must become a text question, and a failed turn never
+// leaks its intent into the next one.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createConversationStore } from '../src/conversations.mjs';
 import { createGatewayServer } from '../src/server.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
 
 const CHAT = (ws) => `/agents/finance-chat-agent/${ws}/rpc/chat`;
 
-function harness({ chatImpl, proposalIntents = createProposalIntentRegistry() } = {}) {
+function harness({ chatImpl, actionIntents = createActionIntentRegistry() } = {}) {
   const store = createConversationStore({ persistDir: approvedTmpRoot('ted-p3-handoff') });
   const gw = createGatewayServer({
     resolveIdentity: async ({ workspaceId }) => ({
@@ -23,11 +24,11 @@ function harness({ chatImpl, proposalIntents = createProposalIntentRegistry() } 
     }),
     store,
     promptHost: { chat: chatImpl, readHistory: async () => [], readRawMessages: async () => [] },
-    createRuntimeSession: async (idn, conversationId) => ({ runtimeSessionId: `rt-${conversationId}` }),
-    withAuthenticatedSession: async (sessionID, host, fn) => fn(),
-    proposalIntents,
+    createRuntimeSession: async (_idn, conversationId) => ({ runtimeSessionId: `rt-${conversationId}` }),
+    withAuthenticatedSession: async (_sessionID, _host, fn) => fn(),
+    actionIntents,
   });
-  return { gw, store, proposalIntents };
+  return { gw, store, actionIntents };
 }
 
 async function listen(gw) {
@@ -61,14 +62,14 @@ async function chat(base, body, cookie) {
   });
 }
 
-describe('P3 proposal handoff', () => {
-  it('attaches the recorded intent to the successful turn exactly once', async () => {
-    const registry = createProposalIntentRegistry();
+describe('action handoff', () => {
+  it('consumes the recorded intent once and never returns an actionable card', async () => {
+    const registry = createActionIntentRegistry();
     const { gw } = harness({
-      proposalIntents: registry,
+      actionIntents: registry,
       chatImpl: async ({ sessionID }) => {
         registry.record(sessionID, intent());
-        return { turnId: 'turn-1', output: 'Vou preparar a proposta.' };
+        return { turnId: 'turn-1', output: 'Vou registrar a despesa.' };
       },
     });
     const base = await listen(gw);
@@ -77,33 +78,34 @@ describe('P3 proposal handoff', () => {
       assert.equal(first.status, 200);
       const dto = await first.json();
       assert.equal(dto.status, 'completed');
-      assert.deepEqual(dto.proposal, intent());
-      assert.equal(dto.proposalObserved, true);
-      assert.equal(registry.size(), 0, 'the intent is consumed by the handoff');
+      assert.equal('proposal' in dto, false, 'no approval card surface');
+      assert.equal(dto.actionObserved, true);
+      assert.match(dto.output, /esclarecer/i, 'no pipeline: ask in text, never claim success');
+      assert.equal(registry.size(), 0, 'the intent is consumed by the turn');
     } finally {
       await gw.close();
     }
   });
 
-  it('does not invent a proposal when the tool did not record one', async () => {
+  it('does not invent an action when the tool did not record one', async () => {
     const { gw } = harness({ chatImpl: async () => ({ turnId: 'turn-1', output: 'ok' }) });
     const base = await listen(gw);
     try {
       const res = await chat(base, { text: 'Quais contas?', intentionId: 'm-1' });
       const dto = await res.json();
       assert.equal('proposal' in dto, false);
-      assert.equal(dto.proposalObserved, false);
-      assert.deepEqual(Object.keys(dto).sort(), ['intentionId', 'output', 'proposalObserved', 'status', 'turnId']);
+      assert.equal(dto.actionObserved, false);
+      assert.deepEqual(Object.keys(dto).sort(), ['actionObserved', 'intentionId', 'output', 'status', 'turnId']);
     } finally {
       await gw.close();
     }
   });
 
   it('a failed turn never leaks its intent into the next turn', async () => {
-    const registry = createProposalIntentRegistry();
+    const registry = createActionIntentRegistry();
     let call = 0;
     const { gw } = harness({
-      proposalIntents: registry,
+      actionIntents: registry,
       chatImpl: async ({ sessionID }) => {
         call += 1;
         if (call === 1) {
@@ -123,17 +125,18 @@ describe('P3 proposal handoff', () => {
       const ok = await chat(base, { text: 'segunda', intentionId: 'm-2' });
       assert.equal(ok.status, 200);
       const dto = await ok.json();
-      assert.equal('proposal' in dto, false, 'stale intent from the failed turn must not cross');
+      assert.equal('proposal' in dto, false);
+      assert.equal(dto.actionObserved, false, 'stale intent from the failed turn must not cross');
     } finally {
       await gw.close();
     }
   });
 
   it('keeps intents scoped to their conversation (two workspaces never cross)', async () => {
-    const registry = createProposalIntentRegistry();
+    const registry = createActionIntentRegistry();
     const seen = [];
     const { gw } = harness({
-      proposalIntents: registry,
+      actionIntents: registry,
       chatImpl: async ({ sessionID, text }) => {
         seen.push(sessionID);
         if (text.includes('R$ 50')) registry.record(sessionID, intent('int-A'));
@@ -144,7 +147,7 @@ describe('P3 proposal handoff', () => {
     try {
       const first = await chat(base, { text: 'R$ 50 no mercado', intentionId: 'm-1' });
       const firstDto = await first.json();
-      assert.ok(firstDto.proposal, 'workspace A turn carries its proposal');
+      assert.equal(firstDto.actionObserved, true, 'workspace A turn observed its action');
 
       const second = await fetch(`${base}${CHAT('H_B')}`, {
         method: 'POST',
@@ -158,7 +161,7 @@ describe('P3 proposal handoff', () => {
       });
       const secondDto = await second.json();
       assert.equal(secondDto.status, 'completed');
-      assert.equal('proposal' in secondDto, false, 'workspace B must not inherit A intent');
+      assert.equal(secondDto.actionObserved, false, 'workspace B must not inherit A intent');
     } finally {
       await gw.close();
     }

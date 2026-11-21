@@ -1,12 +1,12 @@
 // P3.6 statement-payment slice: `list_card_statements` (read) and
-// `propose_statement_payment` (proposal INTENT only).
+// `pay_card_statement` (proposal INTENT only).
 //
 // Contract under test:
 // - The existing local P3 opt-ins expose the read and the proposal; production
 //   forces both off.
 // - `list_card_statements` calls the real GET /cards/statements route with the
 //   optional card filter and fails closed on shape drift.
-// - `propose_statement_payment` NEVER performs HTTP and NEVER writes: it
+// - `pay_card_statement` NEVER performs HTTP and NEVER writes: it
 //   records ONE intent with the exact `cards.statement.pay` tuple
 //   (statementId, fromAccountId, amountCents) for the authenticated PWA/Agent
 //   broker. There is no confirm/execute surface for the LLM.
@@ -26,7 +26,7 @@ import {
   isP3ReadsEnabled,
   isP3WritesEnabled,
 } from '../src/plugin.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 import { HttpFinanceTransport, isRouteAllowlisted } from '../src/transport.mjs';
 
 const host = Object.freeze({
@@ -76,7 +76,7 @@ describe('p3.6 statement payment: catalog gating', () => {
   it('explicit activation applies in production too (no NODE_ENV shortcut)', () => {
     assert.equal(isP3ReadsEnabled(PROD_ENV), true);
     assert.equal(isP3WritesEnabled(PROD_ENV), true);
-    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'propose_statement_payment'));
+    assert.ok(productToolDefs(PROD_ENV).some((d) => d.name === 'pay_card_statement'));
     // Absent flags stay OFF even in production.
     assert.deepEqual(productToolDefs({ NODE_ENV: 'production' }).map((d) => d.name).sort(), ['get_month_summary', 'list_accounts']);
   });
@@ -86,46 +86,46 @@ describe('p3.6 statement payment: catalog gating', () => {
     assert.deepEqual(reads, [...PRODUCT_TOOL_NAMES, ...P3_READ_TOOL_NAMES].sort());
     const writes = productToolDefs(WRITE_ENV).map((d) => d.name).sort();
     assert.ok(writes.includes('list_card_statements'));
-    assert.ok(writes.includes('propose_statement_payment'));
+    assert.ok(writes.includes('pay_card_statement'));
     const read = productToolDefs(WRITE_ENV).find((d) => d.name === 'list_card_statements');
-    const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'propose_statement_payment');
+    const propose = productToolDefs(WRITE_ENV).find((d) => d.name === 'pay_card_statement');
     assert.equal(read.input.type, 'object');
     assert.ok(read.output && read.output.type === 'object');
     assert.equal(propose.input.type, 'object');
     assert.ok(propose.output && propose.output.type === 'object');
     assert.deepEqual([...propose.input.required].sort(), ['amountCents', 'fromAccountId', 'statementId']);
     assert.ok(TOOL_DEFS.some((d) => d.name === 'list_card_statements'));
-    assert.ok(TOOL_DEFS.some((d) => d.name === 'propose_statement_payment'));
+    assert.ok(TOOL_DEFS.some((d) => d.name === 'pay_card_statement'));
     assert.ok(TOOL_NAMES.includes('list_card_statements'));
-    assert.ok(TOOL_NAMES.includes('propose_statement_payment'));
+    assert.ok(TOOL_NAMES.includes('pay_card_statement'));
   });
 });
 
 describe('p3.6 statement payment: argument validation', () => {
   it('accepts the exact statement-payment tuple and rejects invalid values', () => {
-    assert.deepEqual(validateToolArgs('propose_statement_payment', validPayArgs()), validPayArgs());
-    assert.throws(() => validateToolArgs('propose_statement_payment', {}), /statementId/);
+    assert.deepEqual(validateToolArgs('pay_card_statement', validPayArgs()), validPayArgs());
+    assert.throws(() => validateToolArgs('pay_card_statement', {}), /statementId/);
     assert.throws(
-      () => validateToolArgs('propose_statement_payment', validPayArgs({ statementId: 'nope' })),
+      () => validateToolArgs('pay_card_statement', validPayArgs({ statementId: 'nope' })),
       /statementId must be a uuid/,
     );
     assert.throws(
-      () => validateToolArgs('propose_statement_payment', validPayArgs({ fromAccountId: 'nope' })),
+      () => validateToolArgs('pay_card_statement', validPayArgs({ fromAccountId: 'nope' })),
       /fromAccountId must be a uuid/,
     );
     for (const amount of [0, -1, 12.5, '85000', Number.MAX_SAFE_INTEGER + 1]) {
       assert.throws(
-        () => validateToolArgs('propose_statement_payment', validPayArgs({ amountCents: amount })),
+        () => validateToolArgs('pay_card_statement', validPayArgs({ amountCents: amount })),
         /amountCents must be a positive safe integer/,
         `amount ${amount}`,
       );
     }
     assert.throws(
-      () => validateToolArgs('propose_statement_payment', { ...validPayArgs(), amountCents: 'total' }),
+      () => validateToolArgs('pay_card_statement', { ...validPayArgs(), amountCents: 'total' }),
       /amountCents must be a positive safe integer/,
     );
     assert.throws(
-      () => validateToolArgs('propose_statement_payment', { ...validPayArgs(), description: 'x' }),
+      () => validateToolArgs('pay_card_statement', { ...validPayArgs(), description: 'x' }),
       /unknown arg/,
     );
   });
@@ -138,7 +138,7 @@ describe('p3.6 statement payment: argument validation', () => {
     assert.throws(() => validateToolArgs('list_card_statements', { bogus: 1 }), /unknown arg/);
     for (const key of ['token', 'actorId', 'workspaceId', 'householdId', 'deviceId', 'sessionId', 'intentionId', 'idempotencyKey', 'callId']) {
       assert.throws(
-        () => validateToolArgs('propose_statement_payment', { ...validPayArgs(), [key]: 'x' }),
+        () => validateToolArgs('pay_card_statement', { ...validPayArgs(), [key]: 'x' }),
         /forbidden key/,
         `${key} must stay host-bound`,
       );
@@ -183,18 +183,18 @@ describe('p3.6 statement payment: read transport', () => {
 
 describe('p3.6 statement payment: intent only, never HTTP/write', () => {
   it('records one host-bound payment intent and returns a proposal status (no transport call)', async () => {
-    const registry = createProposalIntentRegistry();
+    const registry = createActionIntentRegistry();
     let transportCalls = 0;
     const executors = createToolExecutors(
       async () => { transportCalls += 1; throw new Error('propose must never call the finance transport'); },
-      { proposalIntents: registry },
+      { actionIntents: registry },
     );
-    const out = await executors.propose_statement_payment(validPayArgs(), host, {
+    const out = await executors.pay_card_statement(validPayArgs(), host, {
       sessionID: 'session-statement-1',
       intentionId: 'int-statement-abc',
     });
-    assert.equal(transportCalls, 0, 'no HTTP from propose_statement_payment');
-    assert.equal(out.status, 'proposed');
+    assert.equal(transportCalls, 0, 'no HTTP from pay_card_statement');
+    assert.equal(out.status, 'recorded');
     assert.match(out.summary, /Pagamento de fatura de R\$\s?850,00/);
 
     const intent = registry.take('session-statement-1');
@@ -209,14 +209,14 @@ describe('p3.6 statement payment: intent only, never HTTP/write', () => {
   it('fails closed without the proposal registry or host-bound session', async () => {
     const executors = createToolExecutors(async () => ({ statusCode: 200, body: {} }));
     await assert.rejects(
-      () => executors.propose_statement_payment(validPayArgs(), host, { sessionID: 's', intentionId: 'i' }),
-      /proposal intent registry unavailable/,
+      () => executors.pay_card_statement(validPayArgs(), host, { sessionID: 's', intentionId: 'i' }),
+      /action intent registry unavailable/,
     );
     const withRegistry = createToolExecutors(async () => ({ statusCode: 200, body: {} }), {
-      proposalIntents: createProposalIntentRegistry(),
+      actionIntents: createActionIntentRegistry(),
     });
     await assert.rejects(
-      () => withRegistry.propose_statement_payment(validPayArgs(), host, { intentionId: 'i' }),
+      () => withRegistry.pay_card_statement(validPayArgs(), host, { intentionId: 'i' }),
       /host-bound session context is required/,
     );
   });

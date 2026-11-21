@@ -712,7 +712,6 @@ test.describe("live-mobile-full (PWA produção, viewport mobile)", () => {
       "/hub/categorias",
       "/hub/configuracoes",
       "/compromissos",
-      "/compromissos?aba=pendencias",
       "/a-pagar",
       "/contas",
       "/cartoes",

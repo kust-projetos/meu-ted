@@ -73,10 +73,8 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
-    decidePendingOperation: vi.fn(),
     renewAgentSession: vi.fn(),
   };
 });
@@ -106,7 +104,6 @@ beforeEach(() => {
   vi.mocked(agentClient.fetchAgentHistory).mockImplementation(
     async (workspaceId: string) => histories[workspaceId] ?? [],
   );
-  vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
   vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([]);
   vi.mocked(agentClient.sendAgentMessage).mockResolvedValue(okTurn("t1"));
   appStateMock.state = null;

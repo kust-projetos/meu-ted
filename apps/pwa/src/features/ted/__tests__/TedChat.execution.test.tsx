@@ -10,7 +10,6 @@ import { render, screen, waitFor } from "@/lib/test-utils";
 import userEvent from "@testing-library/user-event";
 import { TedChat } from "../TedChat";
 import * as agentClient from "@/lib/api/agent-client";
-import { PENDING_OPERATIONS_CHANGED_EVENT } from "@/lib/state/use-pending-operations";
 
 vi.mock("@/lib/auth/workspace-context", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth/workspace-context")>();
@@ -73,45 +72,36 @@ beforeEach(() => {
   vi.restoreAllMocks();
   reconcileMutation.mockClear();
   vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
-  vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([]);
   vi.spyOn(agentClient, "fetchActiveUndoProposals").mockResolvedValue([]);
 });
 
 describe("TedChat — execution (ADR-033 S2)", () => {
-  it("succeeded: read-only terminal card + note, financial invalidation/reconciliation, undo kept, no approval card", async () => {
-    const dispatched: Event[] = [];
-    const listener = (event: Event) => dispatched.push(event);
-    window.addEventListener(PENDING_OPERATIONS_CHANGED_EVENT, listener);
-    try {
-      vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
-        turnId: "turn-exec-ok",
-        status: "completed",
-        output: "Concluído: despesa de R$ 85,00.",
-        execution: succeededExecution,
-        undoProposal: {
-          requestId: "undo-1",
-          status: "proposed",
-          expiresAt: "2099-01-01T00:00:00.000Z",
-        },
-      });
+  it("succeeded: read-only terminal card + note, financial reconciliation, undo kept, no approval card", async () => {
+    vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
+      turnId: "turn-exec-ok",
+      status: "completed",
+      output: "Concluído: despesa de R$ 85,00.",
+      execution: succeededExecution,
+      undoProposal: {
+        requestId: "undo-1",
+        status: "proposed",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      },
+    });
 
-      await send();
+    await send();
 
-      const card = await screen.findByTestId("ted-execution-card");
-      expect(card).toHaveAttribute("data-execution-status", "succeeded");
-      expect(screen.getByTestId("ted-execution-outcome")).toHaveTextContent("Operação concluída com sucesso");
-      await waitFor(() => expect(reconcileMutation).toHaveBeenCalledWith({ receipt: RECEIPT }));
-      await waitFor(() => expect(dispatched.length).toBeGreaterThanOrEqual(1));
-      expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Confirmar desfazer" })).toBeInTheDocument();
-      // No approval card and no approval action: the agent already decided.
-      expect(screen.queryByTestId("ted-approval-item")).toBeNull();
-      expect(screen.queryByRole("button", { name: /^Confirmar R\$/ })).toBeNull();
-      expect(card).not.toHaveTextContent("attestation");
-      expect(card).not.toHaveTextContent("hash");
-    } finally {
-      window.removeEventListener(PENDING_OPERATIONS_CHANGED_EVENT, listener);
-    }
+    const card = await screen.findByTestId("ted-execution-card");
+    expect(card).toHaveAttribute("data-execution-status", "succeeded");
+    expect(screen.getByTestId("ted-execution-outcome")).toHaveTextContent("Operação concluída com sucesso");
+    await waitFor(() => expect(reconcileMutation).toHaveBeenCalledWith({ receipt: RECEIPT }));
+    expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirmar desfazer" })).toBeInTheDocument();
+    // Sem card de aprovação: o agente já decidiu e executou.
+    expect(screen.queryByTestId("ted-approval-item")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Confirmar R\$/ })).toBeNull();
+    expect(card).not.toHaveTextContent("attestation");
+    expect(card).not.toHaveTextContent("hash");
   });
 
   it("failed: terminal failure, no financial reconciliation, no approval card", async () => {
@@ -184,51 +174,5 @@ describe("TedChat — execution (ADR-033 S2)", () => {
     expect(reconcileMutation).not.toHaveBeenCalled();
   });
 
-  it("legacy proposal still renders the actionable card with Confirm/Cancel", async () => {
-    vi.spyOn(agentClient, "sendAgentMessage").mockResolvedValue({
-      turnId: "turn-legacy",
-      status: "completed",
-      output: "Preparei a despesa.",
-      proposal: {
-        tool: "transactions.expense.create",
-        intentionId: "int-legacy",
-        normalizedArgs: {
-          amountCents: 8500,
-          description: "Mercado",
-          date: "2026-11-20",
-          accountId: "11111111-1111-4111-8111-111111111111",
-          categoryId: "22222222-2222-4222-8222-222222222222",
-        },
-      },
-    });
-    vi.spyOn(agentClient, "proposePendingOperation").mockResolvedValue({ id: "op-legacy", existing: false });
-    vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([
-      {
-        id: "op-legacy",
-        tool: "transactions.expense.create",
-        status: "proposed",
-        createdAt: "2026-11-20T00:00:00.000Z",
-        expiresAt: "2099-01-01T00:00:00.000Z",
-        presentation: {
-          id: "op-legacy",
-          status: "proposed",
-          tool: "transactions.expense.create",
-          title: "Confirmar despesa",
-          amountCents: 8500,
-          description: "Mercado",
-          date: "2026-11-20",
-          account: { id: "acc-1", label: "Nubank" },
-          category: { id: "cat-1", label: "Alimentação" },
-          expiresAt: "2099-01-01T00:00:00.000Z",
-          warnings: [],
-        },
-      },
-    ]);
 
-    await send();
-
-    expect(await screen.findByRole("button", { name: "Confirmar R$ 85,00" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancelar" })).toBeInTheDocument();
-    expect(screen.queryByTestId("ted-execution-card")).toBeNull();
-  });
 });

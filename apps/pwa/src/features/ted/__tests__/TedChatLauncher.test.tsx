@@ -59,16 +59,6 @@ describe("TedChatLauncher (page navigation)", () => {
     expect(navigation.push).toHaveBeenCalledWith("/ted");
   });
 
-  it("navigates to /ted?operationId= on openTedChat({ operationId })", async () => {
-    render(<TedChatLauncher />);
-    await act(async () => {
-      window.dispatchEvent(
-        new CustomEvent(OPEN_TED_CHAT_EVENT, { detail: { operationId: "op-9" } }),
-      );
-    });
-    expect(navigation.push).toHaveBeenCalledWith("/ted?operationId=op-9");
-    expect(OPEN_TED_CHAT_EVENT).toBe("pwa:open-ted");
-  });
 
   it("navigates to /ted on openTedChat() without options", async () => {
     render(<TedChatLauncher />);

@@ -3,8 +3,8 @@
 // The A0 rollback path and the OpenCode runtime intentionally keep separate
 // execution loops, so this test does NOT try to unify them. It only fails when
 // the runtime starts pointing at something the API does not declare:
-// - every `propose_*` tool must map to an `APPROVAL_TOOL_IDS` entry;
-// - every `propose_*` tool must exist in TOOL_DEFS/TOOL_NAMES;
+// - every action tool must map to an `APPROVAL_TOOL_IDS` entry;
+// - every action tool must exist in TOOL_DEFS/TOOL_NAMES;
 // - every read tool must resolve to a GET route declared in route-inventory.ts.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -63,14 +63,14 @@ const READ_TOOLS = {
 const HOST = Object.freeze({ token: 'host-token', household: 'H_A', actorId: 'actor-a' });
 
 describe('runtime catalog ↔ API contract parity', () => {
-  it('every propose_* tool maps to a Pending V2 approval tool', () => {
+  it('every action tool maps to a Pending V2 approval tool', () => {
     const ids = new Set(approvalToolIds());
     for (const [name, spec] of Object.entries(PROPOSAL_TOOL_SPECS)) {
       assert.ok(ids.has(spec.tool), `${name} -> ${spec.tool} must exist in APPROVAL_TOOL_IDS`);
     }
   });
 
-  it('every propose_* tool is declared in the runtime catalog', () => {
+  it('every action tool is declared in the runtime catalog', () => {
     for (const name of Object.keys(PROPOSAL_TOOL_SPECS)) {
       assert.ok(TOOL_NAMES.includes(name), `${name} must exist in TOOL_NAMES`);
       assert.ok(TOOL_DEFS.some((def) => def.name === name), `${name} must exist in TOOL_DEFS`);

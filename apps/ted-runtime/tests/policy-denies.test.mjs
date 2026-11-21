@@ -102,7 +102,7 @@ describe('PR290 deny-by-default: agents.ted explicit native allowlist', () => {
       const allows = perms.slice(1);
       assert.deepEqual(allows.map((p) => p.resource).sort(), [...EXPECTED_FINANCE_RESOURCES].sort());
       for (const p of allows) assert.equal(p.action, 'ted.finance.read');
-      for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer', 'propose_statement_payment']) {
+      for (const resource of ['record_card_purchase', 'record_expense', 'record_income', 'transfer_between_accounts', 'pay_card_statement']) {
         assert.deepEqual(allows.find((p) => p.resource === resource), {
           action: 'ted.finance.read',
           resource,

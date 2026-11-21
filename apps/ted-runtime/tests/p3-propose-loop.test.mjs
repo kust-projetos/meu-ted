@@ -1,6 +1,6 @@
 ﻿// P3 end-to-end (deterministic, local provider): the exact user message runs
 // the REAL SDK 2.2.4 prompt loop against a scripted OpenAI-compatible stub on
-// 127.0.0.1, the model calls `propose_expense`, and the tool records ONE
+// 127.0.0.1, the model calls `record_expense`, and the tool records ONE
 // proposal intent — with ZERO finance transport calls and ZERO writes.
 //
 // No paid/external inference: every request is loopback and scripted.
@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { setupIsolation, tedConfig, wirePlugin, assertNoRedirectedComponents } from '../src/bootstrap.mjs';
 import { defineTedFinancePlugin } from '../src/plugin.mjs';
-import { createProposalIntentRegistry } from '../src/proposal-intents.mjs';
+import { createActionIntentRegistry } from '../src/action-intents.mjs';
 import { bindSession } from '../src/session-bindings.mjs';
 import { createPromptHost } from '../src/prompt.mjs';
 import { approvedTmpRoot } from './helpers/tmp-root.mjs';
@@ -100,7 +100,7 @@ function offeredToolNames(req) {
   return tools.map((t) => t && t.function && t.function.name).filter((n) => typeof n === 'string');
 }
 
-describe('P3 propose_expense — deterministic prompt-loop (scripted local provider)', () => {
+describe('P3 record_expense — deterministic prompt-loop (scripted local provider)', () => {
   let iso;
   let oc = null;
   let stub = null;
@@ -109,7 +109,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
   let realFetch;
   let transportCalls = 0;
   const chatRequests = [];
-  const registry = createProposalIntentRegistry();
+  const registry = createActionIntentRegistry();
 
   before(async () => {
     iso = setupIsolation(approvedTmpRoot('ted-p3-propose-loop'), 'p3proposeloop');
@@ -175,7 +175,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const allowIdx = providerPolicies.findIndex((p) => p.resource === FIXTURE_PROVIDER && p.effect === 'allow');
     const denyIdx = providerPolicies.findIndex((p) => p.resource === '*' && p.effect === 'deny');
     assert.ok(allowIdx !== -1 && allowIdx > denyIdx, 'test-only provider allow comes after deny-all');
-    for (const resource of ['propose_card_purchase', 'propose_expense', 'propose_income', 'propose_transfer', 'propose_statement_payment']) {
+    for (const resource of ['record_card_purchase', 'record_expense', 'record_income', 'transfer_between_accounts', 'pay_card_statement']) {
       assert.ok(
         (cfg.agents.ted.permissions || []).some((p) => p.resource === resource && p.effect === 'allow'),
         `the P3 config allows exactly the ${resource} permission`,
@@ -196,7 +196,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const transport = async () => { transportCalls += 1; throw new Error('propose must not call the transport'); };
     await wirePlugin(oc, defineTedFinancePlugin(() => transport, {
       env: { TED_OPENCODE_P3_WRITES_ENABLED: '1', NODE_ENV: 'test' },
-      proposalIntents: registry,
+      actionIntents: registry,
     }));
   });
 
@@ -206,8 +206,8 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     if (oc) await oc.close().catch(() => {});
   });
 
-  it('the exact message reaches propose_expense and records one intent (zero writes)', { timeout: 120000 }, async () => {
-    script = { callId: 'call_p3_propose_1', name: 'propose_expense', args: EXPECTED_ARGS, finalText: 'FINAL-PROPOSED-OK' };
+  it('the exact message reaches record_expense and records one intent (zero writes)', { timeout: 120000 }, async () => {
+    script = { callId: 'call_p3_propose_1', name: 'record_expense', args: EXPECTED_ARGS, finalText: 'FINAL-PROPOSED-OK' };
     transportCalls = 0;
     registry.clearAll();
     const mark = chatRequests.length;
@@ -219,7 +219,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const res = await promptHost.chat({ sessionID: created.id, text: USER_MESSAGE, intentionId: 'p3-propose-m1' });
 
     assert.equal(res.output, 'FINAL-PROPOSED-OK');
-    assert.equal(transportCalls, 0, 'propose_expense performs no finance HTTP');
+    assert.equal(transportCalls, 0, 'record_expense performs no finance HTTP');
 
     const newReqs = chatRequests.slice(mark);
     assert.ok(newReqs.length >= 2, `stub saw tool-call and tool-result turns (got ${newReqs.length})`);
@@ -229,13 +229,13 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
       'the exact user message reached the model loop',
     );
     const offered = offeredToolNames(newReqs[0]);
-    for (const name of ['propose_expense', 'list_categories', 'list_accounts']) {
+    for (const name of ['record_expense', 'list_categories', 'list_accounts']) {
       assert.ok(offered.includes(name), `${name} is offered to the model (got ${JSON.stringify(offered)})`);
     }
     const toolTurn = newReqs.find((r) => ((r.body && r.body.messages) || []).some((m) => m && m.role === 'tool'));
     assert.ok(toolTurn, 'the tool result was fed back to the model');
     const toolMsg = (toolTurn.body.messages || []).find((m) => m && m.role === 'tool');
-    assert.match(String(toolMsg.content ?? ''), /proposed/, 'tool result reports a proposal, never execution');
+    assert.match(String(toolMsg.content ?? ''), /recorded/, 'tool result reports a recorded action, never execution');
     assert.ok(!/succeeded/i.test(String(toolMsg.content ?? '')), 'never claims execution');
 
     const intent = registry.take(created.id);
@@ -249,8 +249,8 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     for (const r of newReqs) assert.equal(r.remote, '127.0.0.1', 'all stub requests are loopback');
   });
 
-  it('the income message reaches propose_income and records one income intent (zero writes)', { timeout: 120000 }, async () => {
-    script = { callId: 'call_p3_income_1', name: 'propose_income', args: INCOME_ARGS, finalText: 'FINAL-INCOME-PROPOSED-OK' };
+  it('the income message reaches record_income and records one income intent (zero writes)', { timeout: 120000 }, async () => {
+    script = { callId: 'call_p3_income_1', name: 'record_income', args: INCOME_ARGS, finalText: 'FINAL-INCOME-PROPOSED-OK' };
     transportCalls = 0;
     registry.clearAll();
     const mark = chatRequests.length;
@@ -262,7 +262,7 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
     const res = await promptHost.chat({ sessionID: created.id, text: INCOME_MESSAGE, intentionId: 'p3-propose-income-m1' });
 
     assert.equal(res.output, 'FINAL-INCOME-PROPOSED-OK');
-    assert.equal(transportCalls, 0, 'propose_income performs no finance HTTP');
+    assert.equal(transportCalls, 0, 'record_income performs no finance HTTP');
 
     const newReqs = chatRequests.slice(mark);
     assert.ok(newReqs.length >= 2, `stub saw tool-call and tool-result turns (got ${newReqs.length})`);
@@ -272,13 +272,13 @@ describe('P3 propose_expense — deterministic prompt-loop (scripted local provi
       'the exact income message reached the model loop',
     );
     const offered = offeredToolNames(newReqs[0]);
-    for (const name of ['propose_income', 'propose_expense', 'list_categories', 'list_accounts']) {
+    for (const name of ['record_income', 'record_expense', 'list_categories', 'list_accounts']) {
       assert.ok(offered.includes(name), `${name} is offered to the model (got ${JSON.stringify(offered)})`);
     }
     const toolTurn = newReqs.find((r) => ((r.body && r.body.messages) || []).some((m) => m && m.role === 'tool'));
     assert.ok(toolTurn, 'the tool result was fed back to the model');
     const toolMsg = (toolTurn.body.messages || []).find((m) => m && m.role === 'tool');
-    assert.match(String(toolMsg.content ?? ''), /proposed/, 'tool result reports a proposal, never execution');
+    assert.match(String(toolMsg.content ?? ''), /recorded/, 'tool result reports a recorded action, never execution');
     assert.ok(!/succeeded/i.test(String(toolMsg.content ?? '')), 'never claims execution');
 
     const intent = registry.take(created.id);

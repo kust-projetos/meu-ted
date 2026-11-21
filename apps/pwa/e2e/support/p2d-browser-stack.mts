@@ -52,8 +52,8 @@ const PROBE = path.resolve(HERE, "p2d-synthetic-read-probe.mjs");
 const OFFLINE_CHAT = process.env.P2D_OFFLINE_CHAT === "1";
 const LIVE_REAL = process.env.P2D_LIVE_REAL === "1";
 // P3 proposal slices (test-only): real TED gateway + Pending V2 on the
-// synthetic API + the scripted provider emitting propose_expense (P3.1) or
-// propose_income (P3.2). It reuses the same loopback stack; no external
+// synthetic API + the scripted provider emitting record_expense (P3.1) or
+// record_income (P3.2). It reuses the same loopback stack; no external
 // inference and no production data.
 const EXPENSE = process.env.P2D_EXPENSE === "1";
 const EXPENSE_REAL = process.env.P2D_EXPENSE_REAL === "1";
@@ -438,14 +438,14 @@ function buildProbeConfig(): Record<string, unknown> {
     if (P3_PILOT && !LIVE_REAL) return {
       ...base,
       stub: { mode: "pilot", toolSequence: [
-        { match: "Gastei R$ 65", name: "propose_expense", args: { amountCents: 6500, description: "almoço", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
-        { match: "Recebi R$ 800", name: "propose_income", args: { amountCents: 80000, description: "receita", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_SALARY_A.id } },
-        { match: "Transfira R$ 150", name: "propose_transfer", args: { amountCents: 15000, description: "Transferência Itaú para Neon", date: "2026-11-07", fromAccountId: ACCOUNT_A1.id, toAccountId: ACCOUNT_A2.id } },
-        { match: "Comprei R$ 120", name: "propose_card_purchase", args: { amountCents: 12000, description: "compra à vista", date: "2026-11-07", accountId: CARD_A1.id } },
-        { match: "Comprei R$ 600", name: "propose_card_purchase", args: { amountCents: 60000, description: "compra parcelada", date: "2026-11-07", accountId: CARD_A1.id, installmentsTotal: 3 } },
-        { match: "Pague R$ 300", name: "propose_statement_payment", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 30000 } },
-        { match: "Agora quite", name: "propose_statement_payment", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 2000 } },
-        { match: "despesa extra", name: "propose_expense", args: { amountCents: 100000, description: "piloto extra", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
+        { match: "Gastei R$ 65", name: "record_expense", args: { amountCents: 6500, description: "almoço", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
+        { match: "Recebi R$ 800", name: "record_income", args: { amountCents: 80000, description: "receita", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_SALARY_A.id } },
+        { match: "Transfira R$ 150", name: "transfer_between_accounts", args: { amountCents: 15000, description: "Transferência Itaú para Neon", date: "2026-11-07", fromAccountId: ACCOUNT_A1.id, toAccountId: ACCOUNT_A2.id } },
+        { match: "Comprei R$ 120", name: "record_card_purchase", args: { amountCents: 12000, description: "compra à vista", date: "2026-11-07", accountId: CARD_A1.id } },
+        { match: "Comprei R$ 600", name: "record_card_purchase", args: { amountCents: 60000, description: "compra parcelada", date: "2026-11-07", accountId: CARD_A1.id, installmentsTotal: 3 } },
+        { match: "Pague R$ 300", name: "pay_card_statement", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 30000 } },
+        { match: "Agora quite", name: "pay_card_statement", args: { statementId: "resolve-november", fromAccountId: ACCOUNT_A1.id, amountCents: 2000 } },
+        { match: "despesa extra", name: "record_expense", args: { amountCents: 100000, description: "piloto extra", date: "2026-11-07", accountId: ACCOUNT_A1.id, categoryId: CATEGORY_FOOD_A.id } },
       ] },
     };
     if (STATEMENT_PAY) {
@@ -454,7 +454,7 @@ function buildProbeConfig(): Record<string, unknown> {
         ...base,
         stub: {
           mode: "statement",
-          toolName: "propose_statement_payment",
+          toolName: "pay_card_statement",
           toolArgs: {
             statementId: seededStatement.id,
             fromAccountId: ACCOUNT_A1.id,
@@ -468,7 +468,7 @@ function buildProbeConfig(): Record<string, unknown> {
         ...base,
         stub: {
           mode: "card",
-          toolName: "propose_card_purchase",
+          toolName: "record_card_purchase",
           toolArgs: {
             amountCents: 120000,
             description: "celular",
@@ -484,7 +484,7 @@ function buildProbeConfig(): Record<string, unknown> {
         ...base,
         stub: {
           mode: "card",
-          toolName: "propose_card_purchase",
+          toolName: "record_card_purchase",
           toolArgs: {
             amountCents: 15000,
             description: "supermercado",
@@ -499,7 +499,7 @@ function buildProbeConfig(): Record<string, unknown> {
         ...base,
         stub: {
           mode: "transfer",
-          toolName: "propose_transfer",
+          toolName: "transfer_between_accounts",
           toolArgs: {
             amountCents: 30000,
             description: "Transferência Itaú → Nubank",
@@ -515,7 +515,7 @@ function buildProbeConfig(): Record<string, unknown> {
         ...base,
         stub: {
           mode: "income",
-          toolName: "propose_income",
+          toolName: "record_income",
           toolArgs: {
             amountCents: 250000,
             description: "salário",
@@ -530,7 +530,7 @@ function buildProbeConfig(): Record<string, unknown> {
       ...base,
       stub: {
         mode: "expense",
-        toolName: "propose_expense",
+        toolName: "record_expense",
         toolArgs: {
           amountCents: 5000,
           description: "mercado",

@@ -221,7 +221,7 @@ describe('p2d live-real fetch guard: V1 completion reads', () => {
     assert.equal(JSON.stringify(guard.stats).includes(body), false);
   });
 
-  it('allows category autoexec mint only with the exact service-token contract', async () => {
+  it('denies the retired category autoexec mint route (no longer used by the runtime)', async () => {
     const url = `${API}/auth/agent/category-autoexec-token`;
     const body = JSON.stringify({
       workspaceId: '00000000-0000-4000-8000-000000000001',
@@ -235,31 +235,15 @@ describe('p2d live-real fetch guard: V1 completion reads', () => {
       'x-agent-category-autoexec-service-token': 'category-service-secret',
     };
     const request = { method: 'POST', headers: requestHeaders, body };
-    assert.deepEqual(classifyLiveRealRequest(url, request, options), { action: 'allow-api', reason: 'api' });
-    const missingTokenHeaders = { ...requestHeaders };
-    delete missingTokenHeaders['x-agent-category-autoexec-service-token'];
-    assert.deepEqual(classifyLiveRealRequest(url, {
-      ...request, headers: missingTokenHeaders,
-    }, options), { action: 'deny', reason: 'api_body' });
-    assert.deepEqual(classifyLiveRealRequest(url, {
-      ...request, body: JSON.stringify({ ...JSON.parse(body), extra: 'private-id' }),
-    }, options), { action: 'deny', reason: 'api_body' });
+    assert.deepEqual(classifyLiveRealRequest(url, request, options), { action: 'deny', reason: 'api_method_path' });
 
     const guard = createLiveRealFetchGuard({
       fetchImpl: async () => ({ status: 200 }), apiOrigin: API, expectedModelID: 'test-model',
     });
-    await guard.fetch(url, request);
-    for (const value of ['category-service-secret', body, '00000000-0000-4000-8000-000000000001']) {
-      assert.equal(JSON.stringify(guard.stats).includes(value), false);
-    }
-    await assert.rejects(() => guard.fetch(url, {
-      ...request, headers: missingTokenHeaders,
-    }), (error) => {
-      for (const value of [
-        'category-service-secret', body,
-        '00000000-0000-4000-8000-000000000001',
-        '00000000-0000-4000-8000-000000000004',
-      ]) assert.equal(error.message.includes(value), false);
+    await assert.rejects(() => guard.fetch(url, request), (error) => {
+      for (const value of ['category-service-secret', body]) {
+        assert.equal(error.message.includes(value), false);
+      }
       return true;
     });
   });

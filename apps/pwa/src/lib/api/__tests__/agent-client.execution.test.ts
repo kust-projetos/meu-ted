@@ -10,7 +10,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadPendingChatSend,
-  sanitizeProposalIntent,
   sanitizeSelfConfirmExecution,
   sendAgentMessage,
   composeChatSend,
@@ -169,24 +168,5 @@ describe("sendAgentMessage — execution vs legacy proposal", () => {
     expect(turn.execution).toBeUndefined();
   });
 
-  it("keeps the legacy proposal path unchanged (no execution, anchor retained)", async () => {
-    const legacyIntent = {
-      tool: TOOL,
-      intentionId: "int-legacy",
-      normalizedArgs: {
-        amountCents: 5000,
-        description: "mercado",
-        date: "2026-11-06",
-        accountId: "11111111-1111-4111-8111-111111111111",
-        categoryId: "22222222-2222-4222-8222-222222222222",
-      },
-    };
-    expect(sanitizeProposalIntent(legacyIntent)).toEqual(legacyIntent);
-    mockFetch({ turnId: "t-legacy", status: "completed", output: "Vou preparar.", proposal: legacyIntent });
-    const send = composeChatSend("registre despesa");
-    const turn = await sendAgentMessage("ws-1", send.content, { messageId: send.messageId });
-    expect(turn.proposal).toEqual(legacyIntent);
-    expect(turn.execution).toBeUndefined();
-    expect(loadPendingChatSend("ws-1", null)?.proposal).toEqual(legacyIntent);
-  });
+
 });

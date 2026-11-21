@@ -34,7 +34,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
     renewAgentSession: vi.fn(),
@@ -53,7 +52,6 @@ describe("TedChat — Nova sessão limpa o histórico visível", () => {
     // /rpc/history logo após o POST session/new (nada de mock para []).
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([...OLD_HISTORY]);
     // Sem aprovação/undo ativos por padrão: listas vazias (comportamento atual).
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
     vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([]);
     vi.mocked(agentClient.sendAgentMessage).mockResolvedValue({ turnId: "t1", status: "completed" });
     vi.mocked(agentClient.renewAgentSession).mockResolvedValue({
@@ -92,44 +90,5 @@ describe("TedChat — Nova sessão limpa o histórico visível", () => {
     expect(screen.getByText("Meu saldo?")).toBeInTheDocument();
   });
 
-  it("renovação com aprovação e undo ativos: mensagens vazias + cartões visíveis, sem recarregar mensagens", async () => {
-    const user = userEvent.setup();
-    // Cartões autoritativos vivos (escopo workspace, não sessão).
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([
-      {
-        id: "pending-v2-1",
-        status: "proposed",
-        tool: "transactions.expense.create",
-        createdAt: "2026-10-21T10:00:00.000Z",
-        expiresAt: "2026-10-21T13:00:00.000Z",
-        amountCents: 85000,
-        description: "Mercado",
-        date: "2026-10-21",
-        accountId: "acc-1",
-        categoryId: "cat-1",
-      },
-    ]);
-    vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([
-      { requestId: "proposal-live", status: "proposed", expiresAt: "2099-01-01T12:00:00.000Z" },
-    ]);
-    render(<TedChat />);
-    expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
-    // Cartões vivos já na tela antes da renovação.
-    expect(await screen.findByTestId("ted-approval-item")).toBeInTheDocument();
-    expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
-    const historyCallsBefore = vi.mocked(agentClient.fetchAgentHistory).mock.calls.length;
 
-    await user.click(screen.getByRole("button", { name: /^nova sessão$/i }));
-    expect(await screen.findByRole("status")).toHaveTextContent(/Nova sessão iniciada/);
-    // Contrato: chat visível vazio (só o welcome)…
-    await waitFor(() => expect(screen.queryByText("Meu saldo?")).not.toBeInTheDocument());
-    expect(await screen.findByText("Olá! Sou o TED.")).toBeInTheDocument();
-    // …mas os cartões ativos seguem visíveis.
-    expect(await screen.findByTestId("ted-approval-item")).toBeInTheDocument();
-    expect(await screen.findByTestId("ted-undo-card")).toBeInTheDocument();
-    // Nenhuma recarga de mensagens no caminho novo.
-    expect(vi.mocked(agentClient.fetchAgentHistory).mock.calls.length).toBe(historyCallsBefore);
-    expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledWith("ws-1");
-    expect(agentClient.fetchActiveUndoProposals).toHaveBeenCalledWith("ws-1");
-  });
 });

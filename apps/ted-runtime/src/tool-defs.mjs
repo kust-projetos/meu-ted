@@ -1,26 +1,16 @@
-// TED runtime tool definitions — P1 read-only slice + P3 opt-in category read.
+// TED runtime tool definitions — reads + ACTION tools.
 //
-// Adapted after review from the runtime spike (experiments/ted-runtime):
-// keeps the proven host-bound contract (identity never in tool args, stable
-// intentionId in opts, fail-closed typed errors) but ships ONLY the two P2
-// reads by default: list_accounts + get_month_summary. list_categories is the
-// bounded P3 prerequisite (category resolution for a FUTURE expense proposal):
-// it lives in TOOL_DEFS so args/routing/shape/executors are pinned, yet the
-// product catalog (plugin.mjs productToolDefs) exposes it ONLY under the local
-// opt-in TED_OPENCODE_P3_READS_ENABLED=1 with NODE_ENV !== 'production'.
-// Explicitly NOT present: confirm/execute/approve tools, PG/synthetic
-// bridges, seeds, traces, runners (see README + inventory notes). The P3
-// write slice adds `propose_expense`, which records a PROPOSAL INTENT only —
-// it never calls the API and the LLM can never confirm or execute. P3.2 adds
-// `propose_income` on the SAME intent-only contract (the API already accepts
-// `transactions.income.create`); the shared executor below keeps one code path.
-// P3.3 adds `propose_transfer` (internal transfer, from/to accounts, no
-// category) on that same intent-only contract.
+// Host-bound contract (identity never in tool args, stable intentionId in opts,
+// fail-closed typed errors) is preserved. Reads ship by default; the action
+// tools are the opt-in write slice. An action tool records a fully validated
+// intent and the gateway executes it in the SAME turn when the model declares
+// favorable `assurance`. Missing data or material ambiguity must become a text
+// question instead of a tool call. No approval/pending-card concept exists in
+// this layer; PROPOSAL_TOOL_SPECS below is only the internal name→API-id map.
 
 import { createHash } from 'node:crypto';
-import { recordCatalog, getCatalog } from './category-catalog.mjs';
-import { findDuplicateCategory, isAutocreatableCategoryName } from './category-intelligence.mjs';
-import { ASSURANCE_SCHEMA, normalizeAssurance } from './self-confirm.mjs';
+import { recordCatalog } from './category-catalog.mjs';
+import { ASSURANCE_SCHEMA, normalizeAssurance } from './action-executor.mjs';
 
 const CATEGORY_MEMORY_TOOL = {
   name: 'recall_category_preference',
@@ -352,336 +342,263 @@ export const TOOL_DEFS = [
     output: { type: 'object', description: 'Real GET /audit-logs body ({items, total}).' },
   },
   {
-    // P3 write slice (local opt-in only — see plugin.mjs isP3WritesEnabled).
-    // This tool does NOT write and does NOT call the API: it records ONE
-    // proposal intent (tool + normalizedArgs + stable intention) that the
-    // gateway hands to the authenticated PWA. The PWA sends it to the Agent
-    // broker, the ONLY component allowed to mint `financial.approval.propose`
-    // (A4). The API remains the authority for validation, approval and
-    // execution; the LLM can never confirm or execute.
-    name: 'propose_expense',
-    description:
-      'TED (P3 opt-in): propose an expense for the authenticated user to approve. Records a pending proposal only — never creates the transaction. If the user gives a partial/ambiguous date (e.g. "15/03") and the year cannot be determined from context, ask for clarification instead of guessing; resolve account/category by authoritative reads and ask when more than one fits.',
+    name: 'record_expense',
+    description: 'TED: registra e executa uma despesa. Resolva conta e categoria por leituras autoritativas (list_accounts, list_categories, recall_category_preference); se a data estiver incompleta (ex.: "15/03" sem ano determinável) ou mais de uma conta/categoria servir, pergunte antes de chamar. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
-        description: { type: 'string', minLength: 1, maxLength: 240 },
-        date: { type: 'string', description: 'Expense date YYYY-MM-DD (defaults to today UTC)' },
-        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
-        categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories' },
+        type: 'object',
+        properties: {
+          amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+          description: { type: 'string', minLength: 1, maxLength: 240 },
+          date: { type: 'string', description: 'Expense date YYYY-MM-DD (defaults to today UTC)' },
+          accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+          categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories' },
+        },
+        required: ['amountCents', 'description', 'accountId', 'categoryId'],
+        additionalProperties: false,
       },
-      required: ['amountCents', 'description', 'accountId', 'categoryId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P3.2 income slice — same contract as propose_expense, different tool.
-    // The API already accepts `transactions.income.create` through the existing
-    // Pending V2 tool registry; this tool only records the intent.
-    name: 'propose_income',
-    description:
-      'TED (P3 opt-in): propose an income for the authenticated user to approve. Records a pending proposal only — never creates the transaction. Use the same date/ambiguity rule: an undeterminable year or more than one matching account/category requires clarification before proposing.',
+    name: 'record_income',
+    description: 'TED: registra e executa uma receita. Use a mesma regra de data e resolução de conta/categoria: ano indeterminável ou mais de uma opção exige pergunta antes de chamar. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
-        description: { type: 'string', minLength: 1, maxLength: 240 },
-        date: { type: 'string', description: 'Income date YYYY-MM-DD (defaults to today UTC)' },
-        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
-        categoryId: { type: 'string', description: 'Income category uuid resolved from list_categories' },
+        type: 'object',
+        properties: {
+          amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+          description: { type: 'string', minLength: 1, maxLength: 240 },
+          date: { type: 'string', description: 'Income date YYYY-MM-DD (defaults to today UTC)' },
+          accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+          categoryId: { type: 'string', description: 'Income category uuid resolved from list_categories' },
+        },
+        required: ['amountCents', 'description', 'accountId', 'categoryId'],
+        additionalProperties: false,
       },
-      required: ['amountCents', 'description', 'accountId', 'categoryId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P3.4 card purchase slice — same intent-only contract, card purchase tool.
-    // Card identified via list_credit_cards; categoryId optional.
-    name: 'propose_card_purchase',
-    description:
-      'TED (P3 opt-in): propose a credit-card purchase for the authenticated user to approve, either single (1x) or in installments. Records a pending proposal only — never creates the purchase. Resolve the card via list_credit_cards; if the date year or the card is ambiguous, ask before proposing.',
+    name: 'record_card_purchase',
+    description: 'TED: registra e executa uma compra no cartão de crédito. Resolva o cartão via list_credit_cards; amountCents é o TOTAL (não o valor da parcela). Se o cartão ou o ano da data for ambíguo, pergunte antes de chamar. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        amountCents: { type: 'integer', minimum: 1, description: 'TOTAL purchase amount in cents (BRL), never a per-parcel amount' },
-        description: { type: 'string', minLength: 1, maxLength: 240 },
-        date: { type: 'string', description: 'Purchase date YYYY-MM-DD (defaults to today UTC)' },
-        accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_credit_cards' },
-        categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
-        installmentsTotal: { type: 'integer', minimum: 1, maximum: 48, description: 'Number of installments (1–48). Omit or 1 for a single purchase; amountCents stays the TOTAL.' },
+        type: 'object',
+        properties: {
+          amountCents: { type: 'integer', minimum: 1, description: 'TOTAL purchase amount in cents (BRL), never a per-parcel amount' },
+          description: { type: 'string', minLength: 1, maxLength: 240 },
+          date: { type: 'string', description: 'Purchase date YYYY-MM-DD (defaults to today UTC)' },
+          accountId: { type: 'string', description: 'Credit-card account uuid resolved from list_credit_cards' },
+          categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+          installmentsTotal: { type: 'integer', minimum: 1, maximum: 48, description: 'Number of installments (1–48). Omit or 1 for a single purchase; amountCents stays the TOTAL.' },
+        },
+        required: ['amountCents', 'description', 'accountId'],
+        additionalProperties: false,
       },
-      required: ['amountCents', 'description', 'accountId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P3.3 internal transfer — same intent-only contract. NO category: a
-    // transfer between the user's own accounts is neither income nor expense.
-    // Both ids are resolved from list_accounts; the API revalidates workspace
-    // scope, same-account and the credit-card restriction at propose/execute.
-    name: 'propose_transfer',
-    description:
-      'TED (P3 opt-in): propose an internal transfer between two of the user\'s accounts. Records a pending proposal only — never moves money. Both accounts are resolved from list_accounts; ask when ambiguous or when the date year is undeterminable.',
+    name: 'transfer_between_accounts',
+    description: 'TED: registra e executa uma transferência entre contas do próprio usuário. Sem categoria. Resolva as duas contas via list_accounts; se alguma for ambígua ou o ano da data for indeterminável, pergunte antes de chamar. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
-        description: { type: 'string', minLength: 1, maxLength: 240 },
-        date: { type: 'string', description: 'Transfer date YYYY-MM-DD (defaults to today UTC)' },
-        fromAccountId: { type: 'string', description: 'Source account uuid resolved from list_accounts' },
-        toAccountId: { type: 'string', description: 'Destination account uuid resolved from list_accounts' },
+        type: 'object',
+        properties: {
+          amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+          description: { type: 'string', minLength: 1, maxLength: 240 },
+          date: { type: 'string', description: 'Transfer date YYYY-MM-DD (defaults to today UTC)' },
+          fromAccountId: { type: 'string', description: 'Source account uuid resolved from list_accounts' },
+          toAccountId: { type: 'string', description: 'Destination account uuid resolved from list_accounts' },
+        },
+        required: ['amountCents', 'description', 'fromAccountId', 'toAccountId'],
+        additionalProperties: false,
       },
-      required: ['amountCents', 'description', 'fromAccountId', 'toAccountId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P3.6 statement payment — same intent-only contract. The invoice id and
-    // the payer account id come from the real reads; amountCents is the exact
-    // amount paid NOW (total = the authoritative remaining balance, resolved
-    // by the reader — never a "total" sentinel).
-    name: 'propose_statement_payment',
-    description:
-      'TED (P3 opt-in): propose a total or partial credit-card statement payment for the authenticated user to approve. Records a pending proposal only — never pays the invoice.',
+    name: 'pay_card_statement',
+    description: 'TED: registra e executa o pagamento total ou parcial de uma fatura de cartão. Resolva a fatura via list_card_statements e use como amountCents o saldo restante autoritativo para pagamento total; nunca invente valor ou conta de pagamento. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        statementId: { type: 'string', description: 'Statement uuid resolved from list_card_statements' },
-        fromAccountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts (bank/cash, never credit_card)' },
-        amountCents: { type: 'integer', minimum: 1, description: 'Exact amount paid now in cents (BRL). For a total payment use the statement remaining balance.' },
+        type: 'object',
+        properties: {
+          statementId: { type: 'string', description: 'Statement uuid resolved from list_card_statements' },
+          fromAccountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts (bank/cash, never credit_card)' },
+          amountCents: { type: 'integer', minimum: 1, description: 'Exact amount paid now in cents (BRL). For a total payment use the statement remaining balance.' },
+        },
+        required: ['statementId', 'fromAccountId', 'amountCents'],
+        additionalProperties: false,
       },
-      required: ['statementId', 'fromAccountId', 'amountCents'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P4.2 account creation — same intent-only contract. The API validates
-    // kind (bank|cash) and the signed initial balance; there is no CAS
-    // precondition. The model never confirms or executes.
-    name: 'propose_account_create',
-    description:
-      'TED (P4 opt-in): propose creating a bank/cash account for the authenticated user to approve. Records a pending proposal only — never creates the account.',
+    name: 'create_account',
+    description: 'TED: registra e executa a criação de uma conta bancária ou em dinheiro. initialBalanceCents é o saldo inicial com sinal (0 para conta vazia). Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', minLength: 1, maxLength: 120 },
-        kind: { type: 'string', enum: ['bank', 'cash'] },
-        initialBalanceCents: { type: 'integer', description: 'Signed initial balance in cents (BRL); 0 for an empty account' },
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 120 },
+          kind: { type: 'string', enum: ['bank', 'cash'] },
+          initialBalanceCents: { type: 'integer', description: 'Signed initial balance in cents (BRL); 0 for an empty account' },
+        },
+        required: ['name', 'kind', 'initialBalanceCents'],
+        additionalProperties: false,
       },
-      required: ['name', 'kind', 'initialBalanceCents'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // P4.2 category creation — same intent-only contract. No CAS precondition.
-    // The optional parent is resolved from list_categories; the API revalidates
-    // kind/parent against the workspace catalog.
-    name: 'propose_category_create',
-    description:
-      'TED (P4 opt-in): propose creating an expense/income category for the authenticated user to approve. Records a pending proposal only — never creates the category.',
+    name: 'create_category',
+    description: 'TED: registra e executa a criação de uma categoria de despesa ou receita. Reutilize categorias existentes via list_categories; só crie se nenhuma servir. O pai opcional vem de list_categories. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', minLength: 1, maxLength: 120 },
-        kind: { type: 'string', enum: ['expense', 'income'] },
-        parentId: { type: 'string', description: 'Parent category uuid resolved from list_categories (optional)' },
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 120 },
+          kind: { type: 'string', enum: ['expense', 'income'] },
+          parentId: { type: 'string', description: 'Parent category uuid resolved from list_categories (optional)' },
+        },
+        required: ['name', 'kind'],
+        additionalProperties: false,
       },
-      required: ['name', 'kind'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 completion (opt-in writes): create an accounts-payable commitment.
-    // The API's Pending V2 `payables.create` contract revalidates account,
-    // category and dates at execution.
-    name: 'propose_payable_create',
-    description:
-      'TED (opt-in): propose creating an accounts-payable (bill) for the authenticated user to approve. Records a pending proposal only — never creates the payable. If the due date lacks a determinable year or the payer account is ambiguous, ask before proposing.',
+    name: 'create_payable',
+    description: 'TED: registra e executa a criação de uma conta a pagar. Se o ano do vencimento for indeterminável ou a conta de pagamento for ambígua, pergunte antes de chamar. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        accountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts' },
-        description: { type: 'string', minLength: 1, maxLength: 240 },
-        amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
-        dueDate: { type: 'string', description: 'Due date YYYY-MM-DD' },
-        categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+        type: 'object',
+        properties: {
+          accountId: { type: 'string', description: 'Payer account uuid resolved from list_accounts' },
+          description: { type: 'string', minLength: 1, maxLength: 240 },
+          amountCents: { type: 'integer', minimum: 1, description: 'Positive amount in cents (BRL)' },
+          dueDate: { type: 'string', description: 'Due date YYYY-MM-DD' },
+          categoryId: { type: 'string', description: 'Expense category uuid resolved from list_categories (optional)' },
+        },
+        required: ['accountId', 'description', 'amountCents', 'dueDate'],
+        additionalProperties: false,
       },
-      required: ['accountId', 'description', 'amountCents', 'dueDate'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 completion (opt-in writes): pay an existing accounts-payable. The
-    // display tuple (description/amount/dueDate/accountId) must come from the
-    // authoritative list_payables read; payableId is the only execution key.
-    name: 'propose_payable_pay',
-    description:
-      'TED (opt-in): propose paying an accounts-payable for the authenticated user to approve. Records a pending proposal only — never pays the bill.',
+    name: 'pay_payable',
+    description: 'TED: registra e executa o pagamento de uma conta a pagar. Todos os campos de exibição devem vir de list_payables; payableId é a única chave de execução. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        payableId: { type: 'string', description: 'Payable uuid resolved from list_payables' },
-        description: { type: 'string', minLength: 1, maxLength: 240, description: 'Payable description read from list_payables (display/CAS snapshot)' },
-        amountCents: { type: 'integer', minimum: 1, description: 'Payable amount in cents read from list_payables' },
-        dueDate: { type: 'string', description: 'Payable due date YYYY-MM-DD read from list_payables' },
-        accountId: { type: 'string', description: 'Payer account uuid read from the payable' },
-        paidDate: { type: 'string', description: 'Payment date YYYY-MM-DD (defaults to today UTC)' },
+        type: 'object',
+        properties: {
+          payableId: { type: 'string', description: 'Payable uuid resolved from list_payables' },
+          description: { type: 'string', minLength: 1, maxLength: 240, description: 'Payable description read from list_payables (display/CAS snapshot)' },
+          amountCents: { type: 'integer', minimum: 1, description: 'Payable amount in cents read from list_payables' },
+          dueDate: { type: 'string', description: 'Payable due date YYYY-MM-DD read from list_payables' },
+          accountId: { type: 'string', description: 'Payer account uuid read from the payable' },
+          paidDate: { type: 'string', description: 'Payment date YYYY-MM-DD (defaults to today UTC)' },
+        },
+        required: ['payableId', 'description', 'amountCents', 'dueDate', 'accountId'],
+        additionalProperties: false,
       },
-      required: ['payableId', 'description', 'amountCents', 'dueDate', 'accountId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 CRUD completion (opt-in writes): description-only transaction edit.
-    // The API's transactions.update contract accepts ONLY the description and
-    // an exact expectedDescription CAS; amount/date/account/category are never
-    // part of this tool.
-    name: 'propose_transaction_update',
-    description:
-      'TED (opt-in): propose changing only the description of an existing transaction for the authenticated user to approve. Records a pending proposal only — never edits the transaction.',
+    name: 'update_transaction',
+    description: 'TED: registra e executa a alteração da DESCRIÇÃO de um lançamento existente. A API aceita somente transactionId, nova descrição e a descrição atual exata (expectedDescription) como precondition. Valor, data, conta e categoria NÃO podem ser alterados por esta ferramenta: para esses campos use undo_last_action e registre novamente. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        transactionId: { type: 'string', description: 'Transaction uuid resolved from list_recent_transactions' },
-        description: { type: 'string', minLength: 1, maxLength: 240, description: 'New description' },
-        expectedDescription: { type: 'string', minLength: 1, maxLength: 240, description: 'Current description read from the authoritative transaction list (CAS)' },
+        type: 'object',
+        properties: {
+          transactionId: { type: 'string', description: 'Transaction uuid resolved from list_recent_transactions' },
+          description: { type: 'string', minLength: 1, maxLength: 240, description: 'New description' },
+          expectedDescription: { type: 'string', minLength: 1, maxLength: 240, description: 'Current description read from the authoritative transaction list (CAS)' },
+        },
+        required: ['transactionId', 'description', 'expectedDescription'],
+        additionalProperties: false,
       },
-      required: ['transactionId', 'description', 'expectedDescription'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 CRUD completion (opt-in writes): account rename, name-only + CAS.
-    name: 'propose_account_update',
-    description:
-      'TED (opt-in): propose renaming an existing account for the authenticated user to approve. Records a pending proposal only — never renames the account.',
+    name: 'rename_account',
+    description: 'TED: registra e executa a renomeação de uma conta. expectedName é o nome atual lido de list_accounts (precondition). Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
-        name: { type: 'string', minLength: 1, maxLength: 120, description: 'New account name' },
-        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name read from list_accounts (CAS)' },
+        type: 'object',
+        properties: {
+          accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+          name: { type: 'string', minLength: 1, maxLength: 120, description: 'New account name' },
+          expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name read from list_accounts (CAS)' },
+        },
+        required: ['accountId', 'name', 'expectedName'],
+        additionalProperties: false,
       },
-      required: ['accountId', 'name', 'expectedName'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 CRUD completion (opt-in writes): account deactivation. The API binds
-    // the target by accountId; accountName is display-only (never a CAS key).
-    name: 'propose_account_deactivate',
-    description:
-      'TED (opt-in): propose deactivating an existing account for the authenticated user to approve. Records a pending proposal only — never deactivates the account.',
+    name: 'deactivate_account',
+    description: 'TED: registra e executa a desativação de uma conta. Resolva a conta via list_accounts; accountName é apenas snapshot de exibição. Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
-        accountName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name (display-only snapshot)' },
+        type: 'object',
+        properties: {
+          accountId: { type: 'string', description: 'Account uuid resolved from list_accounts' },
+          accountName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current account name (display-only snapshot)' },
+        },
+        required: ['accountId'],
+        additionalProperties: false,
       },
-      required: ['accountId'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 CRUD completion (opt-in writes): category rename, name-only + CAS.
-    name: 'propose_category_update',
-    description:
-      'TED (opt-in): propose renaming an existing category for the authenticated user to approve. Records a pending proposal only — never renames the category.',
+    name: 'rename_category',
+    description: 'TED: registra e executa a renomeação de uma categoria. expectedName é o nome atual lido de list_categories (precondition). Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
-        name: { type: 'string', minLength: 1, maxLength: 120, description: 'New category name' },
-        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+        type: 'object',
+        properties: {
+          categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
+          name: { type: 'string', minLength: 1, maxLength: 120, description: 'New category name' },
+          expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+        },
+        required: ['categoryId', 'name', 'expectedName'],
+        additionalProperties: false,
       },
-      required: ['categoryId', 'name', 'expectedName'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    // V1 CRUD completion (opt-in writes): category deactivation + CAS.
-    name: 'propose_category_deactivate',
-    description:
-      'TED (opt-in): propose deactivating an existing category for the authenticated user to approve. Records a pending proposal only — never deactivates the category.',
+    name: 'deactivate_category',
+    description: 'TED: registra e executa a desativação de uma categoria. expectedName é o nome atual lido de list_categories (precondition). Executa diretamente quando os dados estiverem completos, explícitos e sem ambiguidade material: informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}. Se faltar dado, não houver leitura autoritativa ou houver ambiguidade, pergunte em texto e NÃO chame esta ferramenta. Nunca invente valores.',
     input: {
-      type: 'object',
-      properties: {
-        categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
-        expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+        type: 'object',
+        properties: {
+          categoryId: { type: 'string', description: 'Category uuid resolved from list_categories' },
+          expectedName: { type: 'string', minLength: 1, maxLength: 120, description: 'Current category name read from list_categories (CAS)' },
+        },
+        required: ['categoryId', 'expectedName'],
+        additionalProperties: false,
       },
-      required: ['categoryId', 'expectedName'],
-      additionalProperties: false,
-    },
-    output: { type: 'object', description: 'Proposal status ({status:"proposed", summary}) — never execution.' },
-  },
-
-  {
-    name: 'correct_pending_proposal',
-    description: 'Corrige a proposta PENDENTE DESTA CONVERSA alterando só os campos citados; nunca cria outra operação. Se não houver proposta pendente, falha.',
-    input: { type: 'object', properties: { amountCents:{type:'integer',minimum:1}, date:{type:'string'}, description:{type:'string',minLength:1,maxLength:240}, categoryId:{type:'string'}, accountId:{type:'string'}, installmentsTotal:{type:'integer',minimum:1,maximum:48} }, required:[], additionalProperties:false },
-    output: { type:'object', description:'Resultado seguro da correção pendente.' },
+    output: { type: 'object', description: " Resultado da ação ({status:\"recorded\", summary}); a operação é executada no mesmo turno quando os dados são completos." },
   },
   {
-    name: 'cancel_pending_proposal',
-    description: 'Cancela a proposta PENDENTE DESTA CONVERSA; nunca cria outra operação. Se não houver proposta pendente, falha.',
-    input: { type:'object', properties:{}, required:[], additionalProperties:false },
-    output: { type:'object', description:'Resultado seguro do cancelamento.' },
-  },
-  {
-    name: 'propose_undo_last_action',
-    description: 'Propõe um cartão para desfazer a última ação financeira reversível desta conversa. Não executa o desfazimento.',
-    input: { type:'object', properties:{}, required:[], additionalProperties:false },
-    output: { type:'object', description:'Proposta de desfazimento aguardando confirmação explícita.' },
+    name: 'undo_last_action',
+    description: 'TED: registra a solicitação de desfazer a última ação financeira reversível desta conversa. O desfazimento é concluído pelo usuário pelo botão Desfazer; esta ferramenta não desfaz por conta própria e não altera os dados diretamente.',
+    input: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    output: { type: 'object', description: 'Resultado do registro da solicitação de desfazer ({status:"recorded"}).' },
   },
 ];
 
 export const TOOL_NAMES = TOOL_DEFS.map((d) => d.name);
 
-// Single source for the intent-only proposal tools: the runtime tool name maps
-// to the exact tool the API's Pending V2 registry accepts.
+// Internal map: runtime action tool name -> the exact tool id in the API registry.
+// Keys are renamed action names; API ids are unchanged.
 export const PROPOSAL_TOOL_SPECS = Object.freeze({
-  propose_expense: Object.freeze({ tool: 'transactions.expense.create', noun: 'Despesa' }),
-  propose_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
-  propose_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
-  propose_transfer: Object.freeze({ tool: 'transactions.transfer.create', noun: 'Transferência' }),
-  propose_statement_payment: Object.freeze({ tool: 'cards.statement.pay', noun: 'Pagamento de fatura' }),
-  propose_account_create: Object.freeze({ tool: 'accounts.create', noun: 'Conta' }),
-  propose_category_create: Object.freeze({ tool: 'categories.create', noun: 'Categoria' }),
-  propose_transaction_update: Object.freeze({ tool: 'transactions.update', noun: 'Descrição do lançamento' }),
-  propose_account_update: Object.freeze({ tool: 'accounts.update', noun: 'Conta' }),
-  propose_account_deactivate: Object.freeze({ tool: 'accounts.deactivate', noun: 'Conta' }),
-  propose_category_update: Object.freeze({ tool: 'categories.update', noun: 'Categoria' }),
-  propose_category_deactivate: Object.freeze({ tool: 'categories.deactivate', noun: 'Categoria' }),
-  propose_payable_create: Object.freeze({ tool: 'payables.create', noun: 'Conta a pagar' }),
-  propose_payable_pay: Object.freeze({ tool: 'payables.pay', noun: 'Pagamento de conta' }),
+  record_expense: Object.freeze({ tool: 'transactions.expense.create', noun: 'Despesa' }),
+  record_income: Object.freeze({ tool: 'transactions.income.create', noun: 'Receita' }),
+  record_card_purchase: Object.freeze({ tool: 'cards.purchase.create', noun: 'Compra no cartão' }),
+  transfer_between_accounts: Object.freeze({ tool: 'transactions.transfer.create', noun: 'Transferência' }),
+  pay_card_statement: Object.freeze({ tool: 'cards.statement.pay', noun: 'Pagamento de fatura' }),
+  create_account: Object.freeze({ tool: 'accounts.create', noun: 'Conta' }),
+  create_category: Object.freeze({ tool: 'categories.create', noun: 'Categoria' }),
+  update_transaction: Object.freeze({ tool: 'transactions.update', noun: 'Descrição do lançamento' }),
+  rename_account: Object.freeze({ tool: 'accounts.update', noun: 'Conta' }),
+  deactivate_account: Object.freeze({ tool: 'accounts.deactivate', noun: 'Conta' }),
+  rename_category: Object.freeze({ tool: 'categories.update', noun: 'Categoria' }),
+  deactivate_category: Object.freeze({ tool: 'categories.deactivate', noun: 'Categoria' }),
+  create_payable: Object.freeze({ tool: 'payables.create', noun: 'Conta a pagar' }),
+  pay_payable: Object.freeze({ tool: 'payables.pay', noun: 'Pagamento de conta' }),
 });
 
-// Self-confirm (S1): every propose_* tool accepts an OPTIONAL `assurance`
-// declaration. With TED_AGENT_SELF_CONFIRM=1 a favorable declaration lets the
-// gateway confirm+execute in the same turn; with the flag OFF (the default)
-// the old intent-only card flow is unchanged and assurance is simply carried
-// as metadata. `assurance` is NEVER copied into normalizedArgs (the API's
-// Pending V2 payload stays byte-identical).
-const ASSURANCE_TOOL_HINT =
-  ' Quando os dados estiverem completos, explícitos e sem ambiguidade material, informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}: a operação é confirmada e executada diretamente. Diante de ambiguidade material ou dado faltante, pergunte em texto e não informe assurance favorável; nunca invente valores.';
+// Every action tool accepts `assurance` as declaration metadata. The gateway
+// executes the recorded action in the same turn only for a favorable declaration;
+// missing/ambiguous data must be asked in text instead. `assurance` is NEVER
+// copied into normalizedArgs (the API payload stays byte-identical).
 for (const def of TOOL_DEFS) {
   if (!Object.hasOwn(PROPOSAL_TOOL_SPECS, def.name)) continue;
   def.input.properties.assurance = ASSURANCE_SCHEMA;
-  if (!def.description.includes('assurance')) def.description = `${def.description}${ASSURANCE_TOOL_HINT}`;
 }
 
 // Canonical uuid shape (any version) — the API revalidates against its real
@@ -702,9 +619,7 @@ const FORBIDDEN_KEYS = new Set([
 
 function knownKeys(name) {
   let keys;
-  if (name === 'correct_pending_proposal') keys = ['amountCents','date','description','categoryId','accountId','installmentsTotal'];
-  else if (name === 'cancel_pending_proposal') keys = [];
-  else if (name === 'recall_category_preference') keys = ['target', 'field'];
+  if (name === 'recall_category_preference') keys = ['target', 'field'];
   else if (name === 'list_accounts') keys = ['kind', 'includeInactive'];
   else if (name === 'list_recent_transactions') keys = ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
   else if (name === 'spending_insights') keys = ['yearMonth', 'insightType', 'lookbackMonths'];
@@ -719,22 +634,22 @@ function knownKeys(name) {
   else if (name === 'list_credit_cards') keys = [];
   else if (name === 'list_categories') keys = ['kind'];
   else if (name === 'list_card_statements') keys = ['accountId', 'status', 'limit'];
-  else if (name === 'propose_statement_payment') keys = ['statementId', 'fromAccountId', 'amountCents'];
-  else if (name === 'propose_transaction_update') keys = ['transactionId', 'description', 'expectedDescription'];
-  else if (name === 'propose_account_update') keys = ['accountId', 'name', 'expectedName'];
-  else if (name === 'propose_account_deactivate') keys = ['accountId', 'accountName'];
-  else if (name === 'propose_category_update') keys = ['categoryId', 'name', 'expectedName'];
-  else if (name === 'propose_category_deactivate') keys = ['categoryId', 'expectedName'];
-  else if (name === 'propose_payable_create') keys = ['accountId', 'description', 'amountCents', 'dueDate', 'categoryId'];
-  else if (name === 'propose_payable_pay') keys = ['payableId', 'description', 'amountCents', 'dueDate', 'accountId', 'paidDate'];
-  else if (name === 'propose_account_create') keys = ['name', 'kind', 'initialBalanceCents'];
-  else if (name === 'propose_category_create') keys = ['name', 'kind', 'parentId'];
-  else if (name === 'propose_transfer') keys = ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
-  else if (name === 'propose_card_purchase') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
-  else if (name === 'propose_expense' || name === 'propose_income') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
+  else if (name === 'pay_card_statement') keys = ['statementId', 'fromAccountId', 'amountCents'];
+  else if (name === 'update_transaction') keys = ['transactionId', 'description', 'expectedDescription'];
+  else if (name === 'rename_account') keys = ['accountId', 'name', 'expectedName'];
+  else if (name === 'deactivate_account') keys = ['accountId', 'accountName'];
+  else if (name === 'rename_category') keys = ['categoryId', 'name', 'expectedName'];
+  else if (name === 'deactivate_category') keys = ['categoryId', 'expectedName'];
+  else if (name === 'create_payable') keys = ['accountId', 'description', 'amountCents', 'dueDate', 'categoryId'];
+  else if (name === 'pay_payable') keys = ['payableId', 'description', 'amountCents', 'dueDate', 'accountId', 'paidDate'];
+  else if (name === 'create_account') keys = ['name', 'kind', 'initialBalanceCents'];
+  else if (name === 'create_category') keys = ['name', 'kind', 'parentId'];
+  else if (name === 'transfer_between_accounts') keys = ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
+  else if (name === 'record_card_purchase') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
+  else if (name === 'record_expense' || name === 'record_income') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
   else keys = ['yearMonth'];
-  // Self-confirm assurance is metadata only: accepted here, stripped from
-  // normalizedArgs by the propose() executor below.
+  // Assurance is metadata only: accepted here, stripped from normalizedArgs
+  // by the recordAction() executor below.
   return Object.hasOwn(PROPOSAL_TOOL_SPECS, name) ? [...keys, 'assurance'] : keys;
 }
 
@@ -882,99 +797,99 @@ export function validateToolArgs(name, args) {
     if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 50)) {
       throw new ToolError('tool.invalid_args', 'list_card_statements: limit must be an integer between 1 and 50');
     }
-  } else if (name === 'propose_statement_payment') {
+  } else if (name === 'pay_card_statement') {
     if (typeof args.statementId !== 'string' || !UUID_RE.test(args.statementId)) {
-      throw new ToolError('tool.invalid_args', 'propose_statement_payment: statementId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'pay_card_statement: statementId must be a uuid');
     }
     if (typeof args.fromAccountId !== 'string' || !UUID_RE.test(args.fromAccountId)) {
-      throw new ToolError('tool.invalid_args', 'propose_statement_payment: fromAccountId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'pay_card_statement: fromAccountId must be a uuid');
     }
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
-      throw new ToolError('tool.invalid_args', 'propose_statement_payment: amountCents must be a positive safe integer');
+      throw new ToolError('tool.invalid_args', 'pay_card_statement: amountCents must be a positive safe integer');
     }
-  } else if (name === 'propose_account_create') {
+  } else if (name === 'create_account') {
     // Structural only: the API owns the account contract (createAccountInputSchema:
     // kind bank|cash, signed initial balance bounded by MAX_MONEY_CENTS). The
     // runtime only stops the model from recording an unusable intent.
     if (typeof args.name !== 'string' || args.name.trim().length === 0 || args.name.trim().length > 120) {
-      throw new ToolError('tool.invalid_args', 'propose_account_create: name must be a non-empty string (max 120)');
+      throw new ToolError('tool.invalid_args', 'create_account: name must be a non-empty string (max 120)');
     }
     if (typeof args.kind !== 'string' || !['bank', 'cash'].includes(args.kind)) {
-      throw new ToolError('tool.invalid_args', 'propose_account_create: kind must be bank|cash');
+      throw new ToolError('tool.invalid_args', 'create_account: kind must be bank|cash');
     }
     if (!Number.isSafeInteger(args.initialBalanceCents) || Math.abs(args.initialBalanceCents) > 1_000_000_000_000) {
-      throw new ToolError('tool.invalid_args', 'propose_account_create: initialBalanceCents must be a safe integer within +/-1e12');
+      throw new ToolError('tool.invalid_args', 'create_account: initialBalanceCents must be a safe integer within +/-1e12');
     }
-  } else if (name === 'propose_category_create') {
+  } else if (name === 'create_category') {
     if (typeof args.name !== 'string' || args.name.trim().length === 0 || args.name.trim().length > 120) {
-      throw new ToolError('tool.invalid_args', 'propose_category_create: name must be a non-empty string (max 120)');
+      throw new ToolError('tool.invalid_args', 'create_category: name must be a non-empty string (max 120)');
     }
     if (typeof args.kind !== 'string' || !['expense', 'income'].includes(args.kind)) {
-      throw new ToolError('tool.invalid_args', 'propose_category_create: kind must be expense|income');
+      throw new ToolError('tool.invalid_args', 'create_category: kind must be expense|income');
     }
     if (args.parentId !== undefined && (typeof args.parentId !== 'string' || !UUID_RE.test(args.parentId))) {
-      throw new ToolError('tool.invalid_args', 'propose_category_create: parentId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'create_category: parentId must be a uuid');
     }
-  } else if (name === 'propose_payable_create') {
+  } else if (name === 'create_payable') {
     if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: accountId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'create_payable: accountId must be a uuid');
     }
     if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: description must be a non-empty string (max 240)');
+      throw new ToolError('tool.invalid_args', 'create_payable: description must be a non-empty string (max 240)');
     }
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: amountCents must be a positive safe integer');
+      throw new ToolError('tool.invalid_args', 'create_payable: amountCents must be a positive safe integer');
     }
     if (typeof args.dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args.dueDate)) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: dueDate must be YYYY-MM-DD');
+      throw new ToolError('tool.invalid_args', 'create_payable: dueDate must be YYYY-MM-DD');
     }
     const due = new Date(`${args.dueDate}T00:00:00Z`);
     if (Number.isNaN(due.getTime()) || due.toISOString().slice(0, 10) !== args.dueDate) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: dueDate must be YYYY-MM-DD');
+      throw new ToolError('tool.invalid_args', 'create_payable: dueDate must be YYYY-MM-DD');
     }
     if (args.categoryId !== undefined && (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId))) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_create: categoryId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'create_payable: categoryId must be a uuid');
     }
-  } else if (name === 'propose_payable_pay') {
+  } else if (name === 'pay_payable') {
     for (const key of ['payableId', 'accountId']) {
       if (typeof args[key] !== 'string' || !UUID_RE.test(args[key])) {
-        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be a uuid`);
+        throw new ToolError('tool.invalid_args', `pay_payable: ${key} must be a uuid`);
       }
     }
     if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_pay: description must be a non-empty string (max 240)');
+      throw new ToolError('tool.invalid_args', 'pay_payable: description must be a non-empty string (max 240)');
     }
     if (!Number.isSafeInteger(args.amountCents) || args.amountCents <= 0) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_pay: amountCents must be a positive safe integer');
+      throw new ToolError('tool.invalid_args', 'pay_payable: amountCents must be a positive safe integer');
     }
     for (const key of ['dueDate', 'paidDate']) {
       if (args[key] === undefined) continue;
       if (typeof args[key] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args[key])) {
-        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be YYYY-MM-DD`);
+        throw new ToolError('tool.invalid_args', `pay_payable: ${key} must be YYYY-MM-DD`);
       }
       const parsed = new Date(`${args[key]}T00:00:00Z`);
       if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== args[key]) {
-        throw new ToolError('tool.invalid_args', `propose_payable_pay: ${key} must be YYYY-MM-DD`);
+        throw new ToolError('tool.invalid_args', `pay_payable: ${key} must be YYYY-MM-DD`);
       }
     }
     if (args.dueDate === undefined) {
-      throw new ToolError('tool.invalid_args', 'propose_payable_pay: dueDate is required');
+      throw new ToolError('tool.invalid_args', 'pay_payable: dueDate is required');
     }
-  } else if (name === 'propose_transaction_update') {
+  } else if (name === 'update_transaction') {
     // Description-only contract: the API schema accepts exactly
     // transactionId + new description + the literal current description used
     // as CAS. No amount/date/account/category can travel through this tool.
     if (typeof args.transactionId !== 'string' || !UUID_RE.test(args.transactionId)) {
-      throw new ToolError('tool.invalid_args', 'propose_transaction_update: transactionId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'update_transaction: transactionId must be a uuid');
     }
     if (typeof args.description !== 'string' || args.description.trim().length === 0 || args.description.trim().length > 240) {
-      throw new ToolError('tool.invalid_args', 'propose_transaction_update: description must be a non-empty string (max 240)');
+      throw new ToolError('tool.invalid_args', 'update_transaction: description must be a non-empty string (max 240)');
     }
     if (typeof args.expectedDescription !== 'string' || args.expectedDescription.length === 0 || args.expectedDescription.length > 240 || args.expectedDescription.trim().length === 0) {
-      throw new ToolError('tool.invalid_args', 'propose_transaction_update: expectedDescription must be the non-empty current description (max 240)');
+      throw new ToolError('tool.invalid_args', 'update_transaction: expectedDescription must be the non-empty current description (max 240)');
     }
-  } else if (name === 'propose_account_update' || name === 'propose_category_update') {
-    const idKey = name === 'propose_account_update' ? 'accountId' : 'categoryId';
+  } else if (name === 'rename_account' || name === 'rename_category') {
+    const idKey = name === 'rename_account' ? 'accountId' : 'categoryId';
     const id = args[idKey];
     if (typeof id !== 'string' || !UUID_RE.test(id)) {
       throw new ToolError('tool.invalid_args', `${name}: ${idKey} must be a uuid`);
@@ -985,25 +900,25 @@ export function validateToolArgs(name, args) {
     if (typeof args.expectedName !== 'string' || args.expectedName.trim().length === 0 || args.expectedName.trim().length > 120) {
       throw new ToolError('tool.invalid_args', `${name}: expectedName must be the non-empty current name (max 120)`);
     }
-  } else if (name === 'propose_account_deactivate') {
+  } else if (name === 'deactivate_account') {
     if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
-      throw new ToolError('tool.invalid_args', 'propose_account_deactivate: accountId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'deactivate_account: accountId must be a uuid');
     }
     if (args.accountName !== undefined && (typeof args.accountName !== 'string' || args.accountName.trim().length === 0 || args.accountName.trim().length > 120)) {
-      throw new ToolError('tool.invalid_args', 'propose_account_deactivate: accountName must be a non-empty string (max 120)');
+      throw new ToolError('tool.invalid_args', 'deactivate_account: accountName must be a non-empty string (max 120)');
     }
-  } else if (name === 'propose_category_deactivate') {
+  } else if (name === 'deactivate_category') {
     if (typeof args.categoryId !== 'string' || !UUID_RE.test(args.categoryId)) {
-      throw new ToolError('tool.invalid_args', 'propose_category_deactivate: categoryId must be a uuid');
+      throw new ToolError('tool.invalid_args', 'deactivate_category: categoryId must be a uuid');
     }
     if (typeof args.expectedName !== 'string' || args.expectedName.trim().length === 0 || args.expectedName.trim().length > 120) {
-      throw new ToolError('tool.invalid_args', 'propose_category_deactivate: expectedName must be the non-empty current name (max 120)');
+      throw new ToolError('tool.invalid_args', 'deactivate_category: expectedName must be the non-empty current name (max 120)');
     }
   } else if (
-    name === 'propose_expense' ||
-    name === 'propose_income' ||
-    name === 'propose_card_purchase' ||
-    name === 'propose_transfer'
+    name === 'record_expense' ||
+    name === 'record_income' ||
+    name === 'record_card_purchase' ||
+    name === 'transfer_between_accounts'
   ) {
     // Structural validation only (types/format). The API remains the authority
     // for the transaction contract (expense/income share the same shape;
@@ -1025,7 +940,7 @@ export function validateToolArgs(name, args) {
         throw new ToolError('tool.invalid_args', `${name}: date must be YYYY-MM-DD`);
       }
     }
-    if (name === 'propose_transfer') {
+    if (name === 'transfer_between_accounts') {
       if (typeof args.fromAccountId !== 'string' || !UUID_RE.test(args.fromAccountId)) {
         throw new ToolError('tool.invalid_args', `${name}: fromAccountId must be a uuid`);
       }
@@ -1035,7 +950,7 @@ export function validateToolArgs(name, args) {
       if (args.fromAccountId === args.toAccountId) {
         throw new ToolError('tool.invalid_args', `${name}: fromAccountId and toAccountId must differ`);
       }
-    } else if (name === 'propose_card_purchase') {
+    } else if (name === 'record_card_purchase') {
       if (typeof args.accountId !== 'string' || !UUID_RE.test(args.accountId)) {
         throw new ToolError('tool.invalid_args', `${name}: accountId must be a uuid`);
       }
@@ -1070,13 +985,6 @@ export function validateToolArgs(name, args) {
     }
   } else if (name === 'list_credit_cards') {
     // No arguments. Structural enforcement is via knownKeys/additionalProperties.
-  } else if (name === 'correct_pending_proposal') {
-    if (!Object.keys(args).length) throw new ToolError('tool.invalid_args','correct_pending_proposal: at least one field is required');
-    const pick = Object.keys(args).includes('installmentsTotal') ? 'propose_card_purchase' : 'propose_expense';
-    const probe = { amountCents: 1000000000000, description: 'x', date: '2026-01-01', accountId: '00000000-0000-0000-0000-000000000000', categoryId: '00000000-0000-0000-0000-000000000000', ...args };
-    validateToolArgs(pick, probe);
-  } else if (name === 'cancel_pending_proposal') {
-    // Exact empty object enforced by knownKeys.
   } else if (name === 'list_accounts') {
     if (args.kind !== undefined && typeof args.kind !== 'string') {
       throw new ToolError('tool.invalid_args', 'list_accounts: kind must be a string');
@@ -1298,7 +1206,7 @@ function assertShape(name, args, body) {
     if (!Array.isArray(body.items)) fail('items must be an array');
     if (!isSafeInt(body.total) || body.total < 0) fail('total must be a non-negative safe integer');
     // The model must never receive a statement without the authoritative
-    // tuple it needs to propose (id/card/competence/total/paid/remaining/
+    // tuple it needs to act on (id/card/competence/total/paid/remaining/
     // due/status). Shape drift fails closed instead of inventing values.
     for (const item of body.items) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) fail('statement item must be an object');
@@ -1346,7 +1254,7 @@ function formatBRL(amountCents) {
   return `R$ ${value.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
-export function createToolExecutors(transport, { proposalIntents, correctionActions } = {}) {
+export function createToolExecutors(transport, { actionIntents, undoActions } = {}) {
   const recallCategoryPreference = async (args, host) => {
     if (!host || typeof host.household !== 'string' || typeof host.actorId !== 'string' ||
         !host.categoryMemoryStore || typeof host.categoryMemoryStore.recall !== 'function') {
@@ -1362,22 +1270,14 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
   const run = async (name, args, host, opts = {}) => {
     requireHostContext(name, host);
     if (name === 'recall_category_preference') return recallCategoryPreference(validateToolArgs(name, args), host);
-    if (name === 'correct_pending_proposal' || name === 'cancel_pending_proposal') {
+    if (name === 'undo_last_action') {
       requireIntention(name, opts);
-      if (typeof opts.sessionID !== 'string' || !opts.sessionID) throw new ToolError('host_context_required', `${name}: sessionID required`);
-      if (!correctionActions) throw new ToolError('tool.unavailable', `${name}: correction action unavailable`);
-      const changed = validateToolArgs(name, args);
-      correctionActions.record(opts.sessionID, { action: name === 'correct_pending_proposal' ? 'correct' : 'cancel', changed, intentionId: opts.intentionId });
-      return { status: 'accepted' };
-    }
-    if (name === 'propose_undo_last_action') {
-      requireIntention(name, opts);
-      if (typeof opts.sessionID !== 'string' || !opts.sessionID || !correctionActions) throw new ToolError('tool.unavailable', 'undo proposal unavailable');
-      correctionActions.record(opts.sessionID, {
+      if (typeof opts.sessionID !== 'string' || !opts.sessionID || !undoActions) throw new ToolError('tool.unavailable', 'undo action unavailable');
+      undoActions.record(opts.sessionID, {
         action: 'undo', intentionId: opts.intentionId,
         conversationId: host.conversationId, workspaceId: host.household, actorId: host.actorId, deviceId: host.deviceId,
       });
-      return { status: 'proposed' };
+      return { status: 'recorded' };
     }
     const intentionId = requireIntention(name, opts);
     const safeArgs = validateToolArgs(name, args);
@@ -1425,41 +1325,30 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
     // response body is never attached (no raw dependency text in details).
     throw new ToolError(code, `${name}: upstream ${statusCode}`, { statusCode });
   };
-  // Proposal INTENT only (expense and income share this ONE code path). No
-  // transport, no API, no write: the authenticated PWA hands the intent to the
-  // Agent broker, the sole A4 issuer. Fails closed without the registry so a
-  // wiring mistake cannot silently record (or worse, drop) a proposal.
-  const propose = async (name, args, host, opts = {}) => {
+  // Records one validated action intent. The gateway owns execution in the
+  // same turn. Fails closed without the registry so a wiring mistake cannot
+  // silently drop the action.
+  const recordAction = async (name, args, host, opts = {}) => {
     const spec = PROPOSAL_TOOL_SPECS[name];
-    if (!spec) throw new ToolError('tool.unknown', `unknown proposal tool ${name}`);
+    if (!spec) throw new ToolError('tool.unknown', `unknown action tool ${name}`);
     requireHostContext(name, host);
     const intentionId = requireIntention(name, opts);
-    if (!proposalIntents || typeof proposalIntents.record !== 'function') {
-      throw new ToolError('tool.unavailable', `${name}: proposal intent registry unavailable — failing closed`);
+    if (!actionIntents || typeof actionIntents.record !== 'function') {
+      throw new ToolError('tool.unavailable', `${name}: action intent registry unavailable — failing closed`);
     }
     if (typeof opts.sessionID !== 'string' || opts.sessionID.length === 0) {
       throw new ToolError('host_context_required', `${name}: host-bound session context is required — hostless execution is blocked by design`);
     }
     const safe = validateToolArgs(name, args);
     // Assurance is declaration metadata, never an API field: a malformed or
-    // omitted declaration is carried as `null` so the gateway (flag ON) can
-    // refuse to execute and fall back to a text question. With the flag OFF
-    // it is inert and the old card flow is unchanged.
+    // omitted declaration is carried as `null` so the gateway refuses to
+    // execute and asks the user in text instead.
     const assurance = args.assurance === undefined ? undefined : normalizeAssurance(args.assurance);
-    const recordIntent = (intent) => proposalIntents.record(opts.sessionID, {
+    const recordIntent = (intent) => actionIntents.record(opts.sessionID, {
       ...intent,
       ...(assurance === undefined ? {} : { assurance }),
     });
-    if (name === 'propose_category_create' && process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED === '1') {
-      const catalog = getCatalog(opts.sessionID);
-      if (!catalog) throw new ToolError('tool.invalid_args', 'propose_category_create: chame list_categories antes de propor a criação');
-      if (!isAutocreatableCategoryName(safe.name)) {
-        throw new ToolError('tool.invalid_args', 'propose_category_create: nome deve ter 1 a 60 caracteres, sem controles');
-      }
-      const duplicate = findDuplicateCategory(catalog, safe.name, safe.kind);
-      if (duplicate) throw new ToolError('tool.invalid_args', `propose_category_create: reutilize a categoria existente "${duplicate.name}"`);
-    }
-    if (name === 'propose_statement_payment') {
+    if (name === 'pay_card_statement') {
       // Exact payment tuple: invoice + payer + amount paid NOW. No date or
       // description is invented; the API revalidates the statement, the
       // remaining balance and the payer account.
@@ -1475,9 +1364,9 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         summary,
         normalizedArgs,
       });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_account_create') {
+    if (name === 'create_account') {
       // Account tuple: name + kind (bank|cash) + signed initial balance. No
       // date/description is invented; the API revalidates kind and the bound.
       const normalizedArgs = {
@@ -1487,9 +1376,9 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Conta "${normalizedArgs.name}" (${normalizedArgs.kind})`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_category_create') {
+    if (name === 'create_category') {
       // Category tuple: name + kind (expense|income) + optional parent resolved
       // from list_categories. The API revalidates kind/parent against the
       // workspace catalog.
@@ -1500,9 +1389,9 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Categoria "${normalizedArgs.name}" (${normalizedArgs.kind})`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_payable_create') {
+    if (name === 'create_payable') {
       const normalizedArgs = {
         accountId: safe.accountId,
         description: safe.description.trim(),
@@ -1512,9 +1401,9 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Conta a pagar de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_payable_pay') {
+    if (name === 'pay_payable') {
       const normalizedArgs = {
         payableId: safe.payableId,
         description: safe.description.trim(),
@@ -1525,9 +1414,9 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Pagar conta "${normalizedArgs.description}" de ${formatBRL(normalizedArgs.amountCents)}`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_transaction_update') {
+    if (name === 'update_transaction') {
       const normalizedArgs = {
         transactionId: safe.transactionId,
         description: safe.description.trim(),
@@ -1535,18 +1424,18 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Alterar descrição de "${normalizedArgs.expectedDescription}" para "${normalizedArgs.description}"`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_account_update' || name === 'propose_category_update') {
-      const normalizedArgs = name === 'propose_account_update'
+    if (name === 'rename_account' || name === 'rename_category') {
+      const normalizedArgs = name === 'rename_account'
         ? { accountId: safe.accountId, name: safe.name.trim(), expectedName: safe.expectedName }
         : { categoryId: safe.categoryId, name: safe.name.trim(), expectedName: safe.expectedName };
-      const noun = name === 'propose_account_update' ? 'conta' : 'categoria';
+      const noun = name === 'rename_account' ? 'conta' : 'categoria';
       const summary = `Renomear ${noun} de "${normalizedArgs.expectedName}" para "${normalizedArgs.name}"`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_account_deactivate') {
+    if (name === 'deactivate_account') {
       // The API binds the target by accountId; accountName is an optional
       // display-only snapshot and never a CAS key.
       const normalizedArgs = {
@@ -1555,13 +1444,13 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       };
       const summary = `Desativar conta${normalizedArgs.accountName ? ` "${normalizedArgs.accountName}"` : ''}`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
-    if (name === 'propose_category_deactivate') {
+    if (name === 'deactivate_category') {
       const normalizedArgs = { categoryId: safe.categoryId, expectedName: safe.expectedName };
       const summary = `Desativar categoria "${normalizedArgs.expectedName}"`;
       recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
-      return { status: 'proposed', summary };
+      return { status: 'recorded', summary };
     }
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
     const baseArgs = {
@@ -1569,7 +1458,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       description: safe.description.trim(),
       date,
     };
-    const normalizedArgs = name === 'propose_transfer'
+    const normalizedArgs = name === 'transfer_between_accounts'
       ? { ...baseArgs, fromAccountId: safe.fromAccountId, toAccountId: safe.toAccountId }
       : {
         ...baseArgs,
@@ -1586,13 +1475,11 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       summary,
       normalizedArgs,
     });
-    return { status: 'proposed', summary };
+    return { status: 'recorded', summary };
   };
   return {
     recall_category_preference: (args, host) => recallCategoryPreference(args, host),
-    correct_pending_proposal: (args, host, opts) => run('correct_pending_proposal', args, host, opts),
-    cancel_pending_proposal: (args, host, opts) => run('cancel_pending_proposal', args, host, opts),
-    propose_undo_last_action: (args, host, opts) => run('propose_undo_last_action', args, host, opts),
+    undo_last_action: (args, host, opts) => run('undo_last_action', args, host, opts),
     list_accounts: (args, host, opts) => run('list_accounts', args, host, opts),
     list_recent_transactions: (args, host, opts) => run('list_recent_transactions', args, host, opts),
     spending_insights: (args, host, opts) => run('spending_insights', args, host, opts),
@@ -1612,19 +1499,19 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
     list_payables: (args, host, opts) => run('list_payables', args, host, opts),
     payable_reminders: (args, host, opts) => run('payable_reminders', args, host, opts),
     list_audit_logs: (args, host, opts) => run('list_audit_logs', args, host, opts),
-    propose_expense: (args, host, opts) => propose('propose_expense', args, host, opts),
-    propose_income: (args, host, opts) => propose('propose_income', args, host, opts),
-    propose_card_purchase: (args, host, opts) => propose('propose_card_purchase', args, host, opts),
-    propose_transfer: (args, host, opts) => propose('propose_transfer', args, host, opts),
-    propose_statement_payment: (args, host, opts) => propose('propose_statement_payment', args, host, opts),
-    propose_account_create: (args, host, opts) => propose('propose_account_create', args, host, opts),
-    propose_category_create: (args, host, opts) => propose('propose_category_create', args, host, opts),
-    propose_transaction_update: (args, host, opts) => propose('propose_transaction_update', args, host, opts),
-    propose_account_update: (args, host, opts) => propose('propose_account_update', args, host, opts),
-    propose_account_deactivate: (args, host, opts) => propose('propose_account_deactivate', args, host, opts),
-    propose_category_update: (args, host, opts) => propose('propose_category_update', args, host, opts),
-    propose_category_deactivate: (args, host, opts) => propose('propose_category_deactivate', args, host, opts),
-    propose_payable_create: (args, host, opts) => propose('propose_payable_create', args, host, opts),
-    propose_payable_pay: (args, host, opts) => propose('propose_payable_pay', args, host, opts),
+    record_expense: (args, host, opts) => recordAction('record_expense', args, host, opts),
+    record_income: (args, host, opts) => recordAction('record_income', args, host, opts),
+    record_card_purchase: (args, host, opts) => recordAction('record_card_purchase', args, host, opts),
+    transfer_between_accounts: (args, host, opts) => recordAction('transfer_between_accounts', args, host, opts),
+    pay_card_statement: (args, host, opts) => recordAction('pay_card_statement', args, host, opts),
+    create_account: (args, host, opts) => recordAction('create_account', args, host, opts),
+    create_category: (args, host, opts) => recordAction('create_category', args, host, opts),
+    update_transaction: (args, host, opts) => recordAction('update_transaction', args, host, opts),
+    rename_account: (args, host, opts) => recordAction('rename_account', args, host, opts),
+    deactivate_account: (args, host, opts) => recordAction('deactivate_account', args, host, opts),
+    rename_category: (args, host, opts) => recordAction('rename_category', args, host, opts),
+    deactivate_category: (args, host, opts) => recordAction('deactivate_category', args, host, opts),
+    create_payable: (args, host, opts) => recordAction('create_payable', args, host, opts),
+    pay_payable: (args, host, opts) => recordAction('pay_payable', args, host, opts),
   };
 }

@@ -344,29 +344,27 @@ export function tedConfig(profileOrOpts, { p3Writes = false, productPrompt = fal
           { action: 'ted.finance.read', resource: 'list_payables', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'payable_reminders', effect: 'allow' },
           { action: 'ted.finance.read', resource: 'list_audit_logs', effect: 'allow' },
-          // P3 local write slice: these permissions are only meaningful when
-          // the plugin registers the proposal tools
+          // Local write slice: these permissions are only meaningful when the
+          // plugin registers the action tools
           // (TED_OPENCODE_P3_WRITES_ENABLED=1). Default config stays exactly
           // the product reads above.
           ...(p3Writes
             ? [
-                { action: 'ted.finance.read', resource: 'propose_expense', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_income', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_card_purchase', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_transfer', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_statement_payment', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_account_create', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_category_create', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_transaction_update', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_account_update', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_account_deactivate', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_category_update', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_category_deactivate', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_payable_create', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_payable_pay', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'correct_pending_proposal', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'cancel_pending_proposal', effect: 'allow' },
-                { action: 'ted.finance.read', resource: 'propose_undo_last_action', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'record_expense', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'record_income', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'record_card_purchase', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'transfer_between_accounts', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'pay_card_statement', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'create_account', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'create_category', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'update_transaction', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'rename_account', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'deactivate_account', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'rename_category', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'deactivate_category', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'create_payable', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'pay_payable', effect: 'allow' },
+                { action: 'ted.finance.read', resource: 'undo_last_action', effect: 'allow' },
               ]
             : []),
         ],
@@ -650,7 +648,7 @@ export async function createTedEnvironment({ root, identity = 'a', transportFact
   // never overwritten; nothing is persisted, logged or handed to the model.
   applyLiveCredentialAlias(resolvedProfile, process.env);
   // P3 write slice is a LOCAL opt-in (never production); the config must carry
-  // the exact propose_expense permission only when the plugin will register it.
+  // the exact record_expense permission only when the plugin will register it.
   const { isP3WritesEnabled } = await import('./plugin.mjs');
   const p3Writes = isP3WritesEnabled(process.env);
   const categoryMemory = process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1';

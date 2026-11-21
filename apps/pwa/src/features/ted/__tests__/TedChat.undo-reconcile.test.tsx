@@ -57,7 +57,6 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
     decideUndoProposal: vi.fn(),
@@ -85,7 +84,6 @@ describe("TedChat — post-undo reconciliation (FIX-P1-UX #175)", () => {
     vi.clearAllMocks();
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-    vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
     vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([
       { requestId: "proposal-7", status: "proposed", expiresAt: FUTURE },
     ]);

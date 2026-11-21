@@ -18,8 +18,6 @@
  *
  * Agent stub (deterministic, loopback — no LLM, no external network):
  *   POST /agents/finance-chat-agent/:ws/rpc/chat
- *   POST /agents/finance-chat-agent/:ws/rpc/pending-operations/:op/decision
- *   GET  /agents/finance-chat-agent/:ws/rpc/pending-operations/active
  *
  * CORS: origin http://127.0.0.1:3000
  * Fixed clock: 2026-07-17T12:00:00.000Z
@@ -1205,12 +1203,6 @@ async function handleFixtureRequest(
     return;
   }
 
-  if (pathname === "/pending-operations" && method === "GET") {
-    journalPush(testId, method, pathname, body, 200);
-    sendJson(res, 200, { items: [], total: 0 });
-    return;
-  }
-
   if (pathname === "/analytics/kpis" && method === "GET") {
     journalPush(testId, method, pathname, body, 200);
     sendJson(res, 200, {
@@ -1310,60 +1302,6 @@ async function handleFixtureRequest(
     };
     journalPush(testId, method, pathname, body, reply.status);
     sendJson(res, reply.status, reply.body);
-    return;
-  }
-
-  const agentDecisionMatch = pathname.match(
-    /^\/agents\/finance-chat-agent\/([^/]+)\/rpc\/pending-operations\/([^/]+)\/decision$/,
-  );
-  if (agentDecisionMatch && method === "POST") {
-    const operationId = agentDecisionMatch[2];
-    const decision = typeof body?.decision === "string" ? body.decision : "";
-    const scripted = store.agentStub.decisions[`${operationId}:${decision}`];
-    if (scripted) {
-      journalPush(testId, method, pathname, body, scripted.status);
-      sendJson(res, scripted.status, scripted.body);
-      return;
-    }
-    if (decision === "cancel") {
-      journalPush(testId, method, pathname, body, 200);
-      sendJson(res, 200, { operationId, status: "cancelled" });
-      return;
-    }
-    if (decision === "confirm" || decision === "retry") {
-      journalPush(testId, method, pathname, body, 200);
-      sendJson(res, 200, {
-        operationId,
-        status: "succeeded",
-        receipt: {
-          mutationId: `rcpt-${operationId}`,
-          mutationKind: "transactions.expense.create",
-          status: "succeeded",
-          affectedTargets: ["transactions"],
-          operationId,
-          // Canonical entity binding (strict client contract): a well-formed
-          // UUID naming the NEW transaction — deterministic per
-          // (testId, operationId), stable across repeats, never the pending
-          // id. Tests needing a malformed receipt must script one explicitly.
-          entity: { type: "transaction", id: deterministicReceiptEntityId(testId, operationId) },
-        },
-      });
-      return;
-    }
-    journalPush(testId, method, pathname, body, 422);
-    sendJson(res, 422, { code: "agent.unknown_decision", message: "Decisão desconhecida." });
-    return;
-  }
-
-  const agentActiveMatch = pathname.match(
-    /^\/agents\/finance-chat-agent\/([^/]+)\/rpc\/pending-operations\/active$/,
-  );
-  if (agentActiveMatch && method === "GET") {
-    journalPush(testId, method, pathname, body, 200);
-    sendJson(res, 200, {
-      items: store.agentStub.activeOps,
-      total: store.agentStub.activeOps.length,
-    });
     return;
   }
 

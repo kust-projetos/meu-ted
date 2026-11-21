@@ -572,12 +572,12 @@ function parseTedGatewayHttps(value: string): string | null {
 }
 
 /**
- * Expanded routing set: conversational RPCs plus the supported Pending V2,
- * undo and workspace-attestation endpoints.
+ * Expanded routing set: conversational RPCs plus the supported undo and
+ * workspace-attestation endpoints.
  * Unlike `isTedConversationalRpcPath`, this set also routes those operations to B.
  * `.../rpc/chat`, `.../rpc/history`, `.../rpc/session/new` under
- * `agents/finance-chat-agent/<workspace>/rpc`, plus Pending V2 propose/active/
- * decision, undo active/decision and workspace empty-attestation RPCs.
+ * `agents/finance-chat-agent/<workspace>/rpc`, plus undo active/decision and
+ * workspace empty-attestation RPCs.
  * Attachments, memory/prefs and all unlisted paths stay on A0. Pure, no env.
  */
 export function isTedRuntimeRpcPath(path: readonly string[]): boolean {
@@ -588,10 +588,6 @@ export function isTedRuntimeRpcPath(path: readonly string[]): boolean {
   const tail = path.slice(4);
   if (tail.length === 1 && (tail[0] === "chat" || tail[0] === "history")) return true;
   if (tail.length === 2 && tail[0] === "session" && tail[1] === "new") return true;
-  if (tail.length === 2 && tail[0] === "pending-operations" &&
-      (tail[1] === "propose" || tail[1] === "active")) return true;
-  if (tail.length === 3 && tail[0] === "pending-operations" &&
-      tail[1].length > 0 && tail[2] === "decision") return true;
   if (tail.length === 2 && tail[0] === "undo" &&
       (tail[1] === "active" || tail[1] === "decision")) return true;
   if (tail.length === 3 && tail[0] === "workspace" &&

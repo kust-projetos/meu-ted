@@ -10,7 +10,7 @@
 //   x-device-token + x-workspace-id, loopback-only origin, never Authorization.
 // - Response shape {items: array, total: non-negative safe integer}; errors
 //   propagate typed; no empty-data fallback.
-// - propose_expense / proposal / POST routes stay refused.
+// - record_expense / proposal / POST routes stay refused.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -175,7 +175,7 @@ describe('p3 category read: transport allowlist and proposal refusal', () => {
     await assert.rejects(() => t.call({ route: '/pending-operations/v2/propose', method: 'POST', host }), /not allowlisted/);
   });
 
-  it('keeps confirm/execute unavailable: propose_expense is intent-only', async () => {
+  it('keeps confirm/execute unavailable: record_expense is intent-only', async () => {
     assert.ok(!('confirm_expense' in createToolExecutors(stubTransport({}))) && !('execute_expense' in createToolExecutors(stubTransport({}))), 'no confirm/execute executors');
     for (const name of ['confirm_expense', 'execute_expense', 'approve_expense']) {
       assert.throws(() => validateToolArgs(name, {}), /unknown tool/);

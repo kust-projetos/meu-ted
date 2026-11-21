@@ -15,8 +15,7 @@ describe("Ted runtime RPC path classifiers", () => {
     path("chat"), path("history"), path("session", "new"),
   ];
   const runtimeOnly = [
-    path("pending-operations", "propose"), path("pending-operations", "active"),
-    path("pending-operations", "id-1", "decision"), path("undo", "active"),
+    path("undo", "active"),
     path("undo", "decision"), path("workspace", "ws-2", "attest-empty"),
   ];
   it.each([...conversational, ...runtimeOnly].map((value) => [value]))(
@@ -34,7 +33,10 @@ describe("Ted runtime RPC path classifiers", () => {
   it.each([
     path("attachments"), path("attachments", "observability"), path("memory", "prefs"),
     path("pending-operations"), path("pending-operations", "id-1"),
-    path("pending-operations", "", "decision"), path("workspace", "ws-2"),
+    path("pending-operations", "", "decision"),
+    path("pending-operations", "propose"), path("pending-operations", "active"),
+    path("pending-operations", "id-1", "decision"),
+    path("workspace", "ws-2"),
     path("workspace", "", "attest-empty"), ["rpc", "chat"], path("unknown"),
   ].map((value) => [value]))("rejects both classifiers for %j", (value) => {
     expect(isTedRuntimeRpcPath(value)).toBe(false);

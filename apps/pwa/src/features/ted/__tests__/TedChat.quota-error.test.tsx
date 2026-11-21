@@ -65,7 +65,6 @@ describe("TedChat — honest message for a denied daily quota", () => {
     vi.clearAllMocks();
     vi.spyOn(agentAuth, "fetchAgentConnectionToken").mockResolvedValue("mock-connection-token");
     vi.spyOn(agentClient, "fetchAgentHistory").mockResolvedValue([]);
-    vi.spyOn(agentClient, "fetchActivePendingOperations").mockResolvedValue([]);
     vi.spyOn(agentClient, "fetchActiveUndoProposals").mockResolvedValue([]);
   });
 

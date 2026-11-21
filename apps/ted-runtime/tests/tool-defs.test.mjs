@@ -1,6 +1,6 @@
 ﻿// P1 RED: read-only tool contract — list_accounts + get_month_summary (P2
 // default) plus the optional P3 list_categories and the P3 proposal INTENTS
-// (propose_expense + propose_income). No confirm/execute/PG bridge in this slice.
+// (record_expense + record_income). No confirm/execute/PG bridge in this slice.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -13,7 +13,7 @@ import {
   ToolError,
 } from '../src/tool-defs.mjs';
 import { PRODUCT_TOOL_NAMES, P3_READ_TOOL_NAMES, P3_WRITE_TOOL_NAMES } from '../src/plugin.mjs';
-import { correctionActionRegistry } from '../src/correction-actions.mjs';
+import { undoActionRegistry } from '../src/undo-actions.mjs';
 
 const host = Object.freeze({
   label: 'a',
@@ -59,12 +59,12 @@ describe('ted-runtime tool catalogue (read-only + proposal intent)', () => {
     );
   });
 
-  it('propose_undo_last_action is P3-write gated and only records an intent', async () => {
-    assert.ok(P3_WRITE_TOOL_NAMES.includes('propose_undo_last_action'));
-    const executors=createToolExecutors(stubTransport({}),{correctionActions:correctionActionRegistry});
-    const result=await executors.propose_undo_last_action({}, {...host,conversationId:'conv-a'}, {intentionId:'msg-undo',sessionID:'runtime-undo'});
-    assert.deepEqual(result,{status:'proposed'});
-    assert.deepEqual(correctionActionRegistry.take('runtime-undo'),{
+  it('undo_last_action is P3-write gated and only records an intent', async () => {
+    assert.ok(P3_WRITE_TOOL_NAMES.includes('undo_last_action'));
+    const executors=createToolExecutors(stubTransport({}),{undoActions:undoActionRegistry});
+    const result=await executors.undo_last_action({}, {...host,conversationId:'conv-a'}, {intentionId:'msg-undo',sessionID:'runtime-undo'});
+    assert.deepEqual(result,{status:'recorded'});
+    assert.deepEqual(undoActionRegistry.take('runtime-undo'),{
       action:'undo',intentionId:'msg-undo',conversationId:'conv-a',workspaceId:host.household,actorId:host.actorId,deviceId:host.deviceId,
     });
   });

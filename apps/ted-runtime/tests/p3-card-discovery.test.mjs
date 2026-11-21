@@ -6,7 +6,7 @@
 // - list_credit_cards is exposed under the existing P3 reads opt-in and calls
 //   GET /cards/accounts, returning {items,total} with credit-card accounts.
 // - POST /cards/accounts stays blocked by the transport allowlist.
-// - propose_card_purchase guides the model to resolve accountId via
+// - record_card_purchase guides the model to resolve accountId via
 //   list_credit_cards.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -81,8 +81,8 @@ describe('p3.8 card discovery: catalog and guidance', () => {
     assert.ok(addedWrites.some((t) => t.name === 'list_credit_cards'));
   });
 
-  it('guides propose_card_purchase accountId resolution via list_credit_cards', () => {
-    const propose = TOOL_DEFS.find((d) => d.name === 'propose_card_purchase');
+  it('guides record_card_purchase accountId resolution via list_credit_cards', () => {
+    const propose = TOOL_DEFS.find((d) => d.name === 'record_card_purchase');
     assert.ok(propose.input.properties.accountId.description.includes('list_credit_cards'));
     assert.ok(!propose.input.properties.accountId.description.includes('list_accounts'));
   });

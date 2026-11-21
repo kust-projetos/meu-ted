@@ -128,7 +128,7 @@ test.describe("live-pwa", () => {
       });
     }
 
-    test("[LIVE-ADMIN-NAV] /pendentes redireciona para compromissos pendencias", async ({ page }) => {
+    test("[LIVE-ADMIN-NAV] /pendentes redireciona para compromissos", async ({ page }) => {
       await page.goto("/pendentes", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);
       expect(page.url()).toContain("/compromissos");
@@ -350,7 +350,7 @@ test.describe("live-pwa", () => {
     test.use({ storageState: USER_STATE_PATH });
 
     test("[LIVE-USER-NAV] membro navega rotas permitidas", async ({ page }) => {
-      const userRoutes = ["/", "/registros", "/hub/patrimonio?aba=contas", "/hub/categorias", "/perfil", "/compromissos?aba=pendencias"];
+      const userRoutes = ["/", "/registros", "/hub/patrimonio?aba=contas", "/hub/categorias", "/perfil", "/compromissos?aba=a-pagar"];
       for (const p of userRoutes) {
         await page.goto(p, { waitUntil: "domcontentloaded" });
         await expect(page.getByRole("button", { name: "Entrar" })).toBeHidden({ timeout: 8000 });

@@ -24,7 +24,7 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | DIRECT-09 | `/orcamentos` | M,D | direct load renders orcamentos shell | empty | navigation |
 | DIRECT-10 | `/patrimonio` | M,D | direct load renders patrimonio shell | empty | navigation |
 | DIRECT-11 | `/perfil` | M,D | direct load renders perfil shell | empty | navigation |
-| DIRECT-12 | `/relatorios` | M,D | direct load renders relatorios shell | empty | navigation |
+| DIRECT-12 | `/compromissos?aba=a-pagar` | M,D | direct load renders accounts-to-pay shell | empty | navigation |
 | NAV-01 | BottomNav | M,D | Início → `/` client navigation | no chunk/CSP error | navigation |
 | NAV-02 | BottomNav | M,D | Extrato → `/registros` client navigation | no chunk/CSP error | navigation |
 | NAV-03 | BottomNav | M,D | Cartões → `/hub/patrimonio?aba=cartoes` | canonical tab retained | navigation |
@@ -160,7 +160,7 @@ C:\Users\walis
 | REDIRECT-01 | `/a-pagar` (legacy) | M,D | legacy route lands on `/compromissos?aba=a-pagar` | unknown query dropped | navigation |
 | REDIRECT-02 | `/contas` (legacy) | M,D | legacy route lands on `/hub/patrimonio?aba=contas` | unknown query dropped | navigation |
 | REDIRECT-03 | `/cartoes?cardId=` (legacy) | M,D | legacy route preserves the card detail param | absent id → list | navigation |
-| REDIRECT-04 | `/pending` (legacy) | M,D | legacy route lands on `/compromissos?aba=pendencias` | unknown query dropped | navigation |
+| REDIRECT-04 | `/pending` (legacy) | M,D | legacy route lands on `/compromissos?aba=a-pagar` | unknown query dropped | navigation |
 
 ## Contract-only coverage
 `manifest.webmanifest`, `/pwa-control`, RUM route, not-found, headers and static assets remain dedicated Vitest/contract tests; they are not application pages.

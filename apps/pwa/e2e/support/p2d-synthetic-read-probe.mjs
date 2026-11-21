@@ -372,15 +372,15 @@ try {
         : "legacy";
     if (STUB_MODE === "proposal") {
       if (
-        stub.toolName !== "propose_expense" &&
-        stub.toolName !== "propose_income" &&
-        stub.toolName !== "propose_card_purchase" &&
-        stub.toolName !== "propose_transfer" &&
-        stub.toolName !== "propose_statement_payment"
+        stub.toolName !== "record_expense" &&
+        stub.toolName !== "record_income" &&
+        stub.toolName !== "record_card_purchase" &&
+        stub.toolName !== "transfer_between_accounts" &&
+        stub.toolName !== "pay_card_statement"
       ) {
         fail(
           "args",
-          "proposal stub requires toolName propose_expense|propose_income|propose_card_purchase|propose_transfer|propose_statement_payment",
+          "action stub requires toolName record_expense|record_income|record_card_purchase|transfer_between_accounts|pay_card_statement",
         );
       }
       if (!stub.toolArgs || typeof stub.toolArgs !== "object" || Array.isArray(stub.toolArgs)) {
@@ -521,7 +521,7 @@ try {
   const { resolveGatewayIdentity } = await mod("src/gateway.mjs");
   const { createConversationStore } = await mod("src/conversations.mjs");
   const { parseConversationCookie } = await mod("src/conversations.mjs");
-  const { correctionActionRegistry } = await mod("src/correction-actions.mjs");
+  const { undoActionRegistry } = await mod("src/undo-actions.mjs");
   const { createGatewayServer } = await mod("src/server.mjs");
   const { createPendingClient } = await mod("src/pending-client.mjs");
   const { bindSession, revokeSession, getBinding, isSameHost, rotateSessionBinding } =
@@ -616,15 +616,15 @@ try {
             });
           } else {
             payload = finalTextEvents(
-              stub.toolName === "propose_income"
-                ? "Proposta de receita preparada."
-                : stub.toolName === "propose_card_purchase"
-                  ? "Proposta de compra no cartão preparada."
-                : stub.toolName === "propose_transfer"
-                  ? "Proposta de transferência preparada."
-                  : stub.toolName === "propose_statement_payment"
-                    ? "Proposta de pagamento de fatura preparada."
-                    : "Proposta de despesa preparada.",
+              stub.toolName === "record_income"
+                ? "Receita registrada."
+                : stub.toolName === "record_card_purchase"
+                  ? "Compra no cartão registrada."
+                : stub.toolName === "transfer_between_accounts"
+                  ? "Transferência registrada."
+                  : stub.toolName === "pay_card_statement"
+                    ? "Pagamento de fatura registrado."
+                    : "Despesa registrada.",
               FIXTURE_MODEL,
             );
           }
@@ -653,7 +653,7 @@ try {
                 pilotIndex++;
                 payload = toolCallEvents({ callId: `call_p2d_${++callSeq}`, name: step.name, args, model: FIXTURE_MODEL });
               }
-            } else payload = finalTextEvents("Proposta preparada para confirmação.", FIXTURE_MODEL);
+            } else payload = finalTextEvents("Operação concluída.", FIXTURE_MODEL);
           }
         } else if (STUB_MODE === "sequence") {
           const parsed = extractToolDtos(messages);
@@ -899,11 +899,11 @@ try {
       "list_categories",
       "list_card_statements",
       "list_credit_cards",
-      "propose_expense",
-      "propose_income",
-      "propose_transfer",
-      "propose_card_purchase",
-      "propose_statement_payment",
+      "record_expense",
+      "record_income",
+      "transfer_between_accounts",
+      "record_card_purchase",
+      "pay_card_statement",
     ]);
     pluginOptions.onEffectiveTools = (names, error) => {
       if (error || !Array.isArray(names)) {
@@ -977,13 +977,11 @@ try {
   // that wrapper is covered by the gateway-auth tests with a stub prompt
   // host; here the prompt host is real and the wrapper choice is explicit).
   const sessionQueues = new Map();
-  let statsSessionID = null;
   let lastPin = "none";
   const withAuthenticatedSession = async (sessionID, host, fn) => {
     if (typeof sessionID !== "string" || sessionID.length === 0) throw new Error("sessionID is required");
     if (!host || typeof host !== "object") throw new Error("host context is required");
     if (typeof fn !== "function") throw new Error("fn is required");
-    statsSessionID = sessionID;
     const execute = async () => {
       await oc.session.get({ sessionID });
       let current = null;
@@ -1122,19 +1120,6 @@ try {
     workspaceDeletionServiceToken: process.env.TED_WORKSPACE_DELETION_SERVICE_TOKEN ?? "",
     workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
   });
-  const autoExecEnabled = process.env.TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED === "1";
-  const categoryAutoExecMintToken = process.env.TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN ?? "";
-  let categoryAutoExecClient = null;
-  if (autoExecEnabled && categoryAutoExecMintToken.length >= 32) {
-    const { createAutoExecClient } = await mod("src/autoexec-client.mjs");
-    categoryAutoExecClient = createAutoExecClient({
-      apiBaseUrl,
-      allowedOrigins: [],
-      serviceToken: categoryAutoExecMintToken,
-      mintPath: "/auth/agent/category-autoexec-token",
-      serviceHeaderName: "x-agent-category-autoexec-service-token",
-    });
-  }
   gateway = createGatewayServer({
     resolveIdentity: ({ cookie, deviceToken, workspaceId }) => {
       // Keep only the parsed pin classification; never retain or emit the cookie.
@@ -1144,8 +1129,7 @@ try {
     store,
     promptHost,
     pendingClient,
-    categoryAutoExecClient,
-    autoExecEnabled,
+    undoActions: undoActionRegistry,
     workspaceDeletionSecret: process.env.WORKSPACE_DELETION_HMAC_SECRET ?? "",
     stateDir: tedEnv.dirs.state,
     ...(process.env.TED_OPENCODE_CATEGORY_MEMORY_ENABLED === '1'
@@ -1205,20 +1189,11 @@ try {
         if (!line) continue;
         try {
           if (line === "stats") {
-            const correctionCandidatePresent = typeof correctionActionRegistry.peek === "function"
-              ? !!correctionActionRegistry.peek(statsSessionID)
-              : "NOT_OBSERVED";
-            const correctionCandidateKnown = correctionCandidatePresent !== "NOT_OBSERVED";
             const stats = {
               phase: "serve-stats", promptCalls, transportCalls, messageLists,
               categoryRecallCalls, categoryRecallReturnedValue,
-              categoryAutoExecEnabled: autoExecEnabled,
-              categoryAutoExecClientPresent: !!categoryAutoExecClient,
-              intentEligible: "NOT_OBSERVED",
-              correctionCandidatePresent,
-              correctionCandidateKnown,
+              undoActionsPresent: typeof undoActionRegistry.record === "function",
               lastPin,
-              wouldAttemptAutoexecAssumingNoCorrection: "NOT_OBSERVED",
               stubTurns: chatRequests.length, offeredTools: offeredToolNames(), stubRemotes,
               stubMismatches, fetchBlockedCatalog, fetchBlockedUnexpected, fetchAllowedLoopback,
               stubUrlCounts: chatRequests.reduce((acc, r) => {

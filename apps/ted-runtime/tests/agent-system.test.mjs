@@ -13,26 +13,28 @@ describe('TED product system prompt', () => {
     assert.equal(typeof TED_AGENT_SYSTEM_PROMPT, 'string');
     assert.ok(TED_AGENT_SYSTEM_PROMPT.trim());
     for (const text of [
-      /REGRA DE OURO/i, /list_categories/, /propose_category_create/,
-      /corrigem a proposta pendente/i, /não é correção/i,
+      /REGRA DE OURO/i, /list_categories/, /create_category/,
+      /JÁ FOI EXECUTADO/i, /não é correção/i,
       /Nunca invente números/i, /Nunca peça senhas/i, /Nunca mostre IDs técnicos/i,
       /primeira mensagem/i, /ambiguidade material/i,
-      /receita, não despesa/i, /propose_card_purchase/i,
-      /propose_statement_payment/i, /nunca é despesa/i,
-      /propose_transfer/i, /sem categoria/i,
+      /receita, não despesa/i, /record_card_purchase/i,
+      /pay_card_statement/i, /nunca é despesa/i,
+      /transfer_between_accounts/i, /sem categoria/i,
       /reutilize categorias existentes equivalentes/i,
       /13º salário/i, /cashback/i, /estorno/i,
       /NUNCA pergunte ao usuário/i, /decida você/i,
-      /proponha a criação com propose_category_create/i,
+      /chame create_category/i,
       /recall_category_preference/i, /descrição completa do lançamento/i,
-      /pergunte quando houver ambiguidade material/i,
-      /duas contas homônimas/i, /ano indeterminável/i,
-      /nunca confirma nem executa/i, /preservando os demais/i,
+      /NÃO chame a ferramenta/i,
+      /duas contas iguais/i, /ano indeterminável/i,
+      /chame a ferramenta com assurance/i, /desfaça e registre de novo/i,
       /sem dado disponível/i, /nunca adivinhe/i,
     ]) assert.match(TED_AGENT_SYSTEM_PROMPT, text);
     assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /\$\{|<[^>]+>|\{\{|\}\}/);
     assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /(?:palavras-chave|palavras chave)/i);
     assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /(?:propose_category_(?:update|fix)|correct_category)/i);
+    assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /aprova|aprovar|aprovado|proposta pendente|confirmação/i);
+    assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /correct_pending_proposal|cancel_pending_proposal|propose_/i);
   });
 
   it('includes structured-response formatting guidance and keeps the safeguards intact', () => {
@@ -47,7 +49,7 @@ describe('TED product system prompt', () => {
       /emoji isolado em uma linha/i, /nunca repita dados/i, /pt-BR/i,
     ]) assert.match(TED_AGENT_SYSTEM_PROMPT, text);
     for (const safeguard of [
-      /REGRA DE OURO/i, /nunca confirma nem executa/i, /assurance/i,
+      /REGRA DE OURO/i, /executada na hora/i, /assurance/i,
       /Nunca peça senhas/i, /Nunca mostre IDs técnicos/i, /Nunca invente números/i,
     ]) assert.match(TED_AGENT_SYSTEM_PROMPT, safeguard);
   });

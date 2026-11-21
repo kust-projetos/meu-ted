@@ -1,7 +1,9 @@
 # ADR-033 — Confirmação de Pending V2 feita pelo agente TED
 
-**Status:** aceita em 2026-11-20; implementação em fatias na branch `feat/ted-agent-self-confirm`; `TED_AGENT_SELF_CONFIRM` default-off; sem autorização de produção.
+**Status:** Superseded by ADR-034 (2026-11-21) — decisão histórica, mantida apenas como registro; a direção vigente remove a flag, o card e o conceito de aprovação.
 **Data:** 2026-11-20
+
+> **Superseded by [ADR-034](ADR-034-agente-executa-sem-aprovacao.md):** o agente executa sem aprovação, sem `TED_AGENT_SELF_CONFIRM` e sem card Confirmar/Cancelar. O texto abaixo descreve a decisão original e não é mais o estado vigente.
 
 ## Contexto
 

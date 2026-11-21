@@ -65,10 +65,8 @@ vi.mock("@/lib/api/agent-client", async (importOriginal) => {
   return {
     ...actual,
     fetchAgentHistory: vi.fn(),
-    fetchActivePendingOperations: vi.fn(),
     fetchActiveUndoProposals: vi.fn(),
     sendAgentMessage: vi.fn(),
-    decidePendingOperation: vi.fn(),
     renewAgentSession: vi.fn(),
   };
 });
@@ -80,7 +78,6 @@ beforeEach(() => {
   wsMock.ws.workspaces = [WS1];
   wsMock.ws.activeWorkspace = WS1;
   vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([]);
-  vi.mocked(agentClient.fetchActivePendingOperations).mockResolvedValue([]);
   vi.mocked(agentClient.fetchActiveUndoProposals).mockResolvedValue([]);
   appStateMock.state = null;
 });
