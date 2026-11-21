@@ -619,3 +619,37 @@ export function tedWorkspaceIdFromPath(path: readonly string[]): string | null {
   return typeof ws === "string" && ws.length > 0 ? ws : null;
 }
 
+const TED_CONVERSATION_COOKIE = "ted-runtime-conversation";
+
+/**
+ * Removes legacy A0 conversation pins (`ted-runtime-conversation=agent`)
+ * minted before the 2026-11-17 OpenCode-only cutover so browsers migrate
+ * transparently to an OpenCode session and receive a fresh `opencode.<uuid>`
+ * cookie. Session cookies, `opencode.<uuid>` pins, and malformed values pass
+ * through untouched so `ted-runtime` still enforces auth and clears invalid
+ * B pins fail-closed.
+ */
+export function stripRetiredA0ConversationCookie(
+  cookieHeader: string | null | undefined,
+): string | null {
+  if (!cookieHeader) return null;
+  const kept: string[] = [];
+  for (const rawPart of cookieHeader.split(";")) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq !== -1) {
+      const name = part.slice(0, eq).trim();
+      if (name === TED_CONVERSATION_COOKIE) {
+        let value = part.slice(eq + 1).trim();
+        if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+          value = value.slice(1, -1);
+        }
+        if (value === "agent") continue;
+      }
+    }
+    kept.push(part);
+  }
+  return kept.length > 0 ? kept.join("; ") : null;
+}
+

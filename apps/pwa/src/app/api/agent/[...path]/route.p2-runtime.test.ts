@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const ctx = { params: Promise.resolve({ path: ["agents", "finance-chat-agent", "ws-1", "rpc", "chat"] }) };
 const req = (headers: Record<string, string> = {}) => new Request("https://pwa.example/api/agent/agents/ws/rpc/chat", {
@@ -50,5 +50,64 @@ describe("gateway-only agent proxy", () => {
       method: "POST", headers: { origin: "https://pwa.example", "content-length": "2097153" }, body: "{}",
     });
     expect((await POST(large, ctx)).status).toBe(413);
+  });
+
+  it("strips legacy ted-runtime-conversation=agent pins while keeping session cookies and returning new B cookie", async () => {
+    setGateway();
+    let forwardedCookie: string | null = null;
+    const bSetCookie = "ted-runtime-conversation=opencode.11111111-1111-4111-8111-111111111111; Path=/api/agent/agents/finance-chat-agent/ws-1/rpc; Max-Age=2592000; HttpOnly; SameSite=Lax; Secure";
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      forwardedCookie = new Headers(init?.headers).get("cookie");
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json", "set-cookie": bSetCookie },
+      });
+    }));
+
+    const historyReq = new Request("https://pwa.example/api/agent/agents/finance-chat-agent/ws-1/rpc/history", {
+      method: "GET",
+      headers: { cookie: "better-auth.session_token=tok; ted-runtime-conversation=agent" },
+    });
+    const historyRes = await GET(historyReq, { params: Promise.resolve({ path: ["agents", "finance-chat-agent", "ws-1", "rpc", "history"] }) });
+    expect(historyRes.status).toBe(200);
+    expect(forwardedCookie).toBe("better-auth.session_token=tok");
+    expect(historyRes.headers.get("set-cookie")).toBe(bSetCookie);
+
+    const chatRes = await POST(req({ cookie: 'ted-runtime-conversation="agent"; other=1' }), ctx);
+    expect(chatRes.status).toBe(200);
+    expect(forwardedCookie).toBe("other=1");
+  });
+
+  it("omits the cookie header completely when only legacy ted-runtime-conversation=agent was sent", async () => {
+    setGateway();
+    let sentHeaders: Headers | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sentHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ code: "auth.session_required" }), { status: 401 });
+    }));
+
+    const res = await POST(req({ cookie: "ted-runtime-conversation=agent" }), ctx);
+    expect(res.status).toBe(401);
+    expect(sentHeaders?.has("cookie")).toBe(false);
+  });
+
+  it("preserves valid and invalid opencode pins unchanged and drops only legacy agent when both exist", async () => {
+    setGateway();
+    const captured: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(new Headers(init?.headers).get("cookie"));
+      return new Response("ok", { status: 200 });
+    }));
+
+    const validPin = "ted-runtime-conversation=opencode.11111111-1111-4111-8111-111111111111";
+    await POST(req({ cookie: `session=s; ${validPin}` }), ctx);
+    await POST(req({ cookie: "session=s; ted-runtime-conversation=opencode.not-a-uuid" }), ctx);
+    await POST(req({ cookie: `ted-runtime-conversation=agent; session=s; ${validPin}` }), ctx);
+
+    expect(captured).toEqual([
+      `session=s; ${validPin}`,
+      "session=s; ted-runtime-conversation=opencode.not-a-uuid",
+      `session=s; ${validPin}`,
+    ]);
   });
 });
