@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { isBrowserOriginAllowed, resolveTedGatewayOrigin, readBoundedBody, type AgentProxyEnv } from "@/proxy-utils";
+import {
+  isBrowserOriginAllowed,
+  readBoundedBody,
+  resolveTedGatewayOrigin,
+  stripRetiredA0ConversationCookie,
+  type AgentProxyEnv,
+} from "@/proxy-utils";
 
 type ProxyEnv = AgentProxyEnv;
 type RouteContext = { params: Promise<{ path: string[] }> };
@@ -49,7 +55,8 @@ async function proxy(request: Request, context: RouteContext): Promise<NextRespo
   const target = `${gateway}/${path.map(encodeURIComponent).join("/")}${new URL(request.url).search}`;
   const headers = new Headers();
   for (const name of ["cookie", "x-workspace-id", "x-device-token", "origin", "x-forwarded-proto"]) {
-    const value = request.headers.get(name);
+    const rawValue = request.headers.get(name);
+    const value = name === "cookie" ? stripRetiredA0ConversationCookie(rawValue) : rawValue;
     if (value) headers.set(name, value);
   }
   const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
