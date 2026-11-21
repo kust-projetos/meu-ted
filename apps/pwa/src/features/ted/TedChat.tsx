@@ -22,7 +22,7 @@ import {
   type PendingChatSend,
 } from "@/lib/api/agent-client";
 import { TedMessage, type TedDeliveryState } from "./TedMessage";
-import { TedApprovalCard, type TedPendingOperation } from "./TedApprovalCard";
+import { TedApprovalCard, TedExecutionCard, type TedPendingOperation } from "./TedApprovalCard";
 import { TedUndoCard, type TedUndoProposal } from "./TedUndoCard";
 import { useOptionalAppState } from "@/lib/state/app-state-context";
 import { routePatrimonio } from "@/lib/routes";
@@ -927,12 +927,17 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       const returnedPendingOperation = turn.pendingOperation;
       const returnedUndoProposal = turn.undoProposal;
       const returnedProposal = turn.proposal;
+      // ADR-033 S2: with self-confirm enabled the gateway already confirmed and
+      // executed in this turn; the response carries a READ-ONLY `execution`
+      // instead of an actionable proposal. It is a real result (never a failed
+      // empty turn) and must never become an approval card.
+      const returnedExecution = turn.execution;
       // P1 output vazio: um 200 sem texto de resposta E sem decisão estruturada
-      // (pendingOperation/undoProposal/proposal) não é sucesso — é falha retentável.
+      // (pendingOperation/undoProposal/proposal/execution) não é sucesso — é falha retentável.
       // Marca o balão como failed com retry e preserva âncora/draft (sem
       // reload de histórico, sem limpar nada), em vez do falso sucesso
       // (sent + âncora limpa).
-      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal && !returnedProposal) {
+      if (!turn.output?.trim() && !returnedPendingOperation && !returnedUndoProposal && !returnedProposal && !returnedExecution) {
         if (isStaleScope(sendWorkspaceId)) return;
         setMessages((prev) => prev.map((m) => (m.id === send.messageId ? { ...m, delivery: "failed" as const } : m)));
         setError(MESSAGE_SEND_ERROR);
@@ -942,15 +947,23 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       // T3.3 (§15.4): a natural-language confirmation turn that EXECUTED in
       // the same round-trip carries the real execution receipt — reconcile
       // from it immediately (same single reconciler as the button path).
-      const executedTurn = turn.pendingOperation?.status === "succeeded" ? turn.pendingOperation : undefined;
+      const decisionReceipt =
+        turn.pendingOperation?.status === "succeeded" ? turn.pendingOperation.receipt : undefined;
+      // ADR-033 S2: the agent self-confirm path carries the SAME canonical
+      // receipt (already strict-validated by the client) — invalidate financial
+      // data exactly as the button path does. failed/unverified never reconcile.
+      const executionReceipt =
+        returnedExecution?.status === "succeeded" ? returnedExecution.receipt : undefined;
+      const executedTurn = !!decisionReceipt || !!executionReceipt;
       if (executedTurn) {
         // T5.3 (SPEC §22): a turn executed an operation to a terminal
         // (succeeded) state — invalidate the external pending reflections.
         notifyPendingOperationsChanged();
       }
-      if (executedTurn?.receipt && reconcileFinancialUi) {
+      const executedReceipt = decisionReceipt ?? executionReceipt;
+      if (executedReceipt && reconcileFinancialUi) {
         try {
-          await reconcileFinancialUi({ receipt: executedTurn.receipt });
+          await reconcileFinancialUi({ receipt: executedReceipt });
         } catch {
           // Reconciliation failure surfaces as stale in app-state.
         }
@@ -1026,6 +1039,10 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             content: turn.output!,
             createdAt: new Date().toISOString(),
             isOwn: false,
+            // ADR-033 S2: the read-only terminal state rides on the assistant
+            // message; TedMessage renders its copy and the list renders the
+            // receipt-aware (button-free) card below it.
+            ...(returnedExecution ? { execution: returnedExecution } : {}),
           },
         ]);
       }
@@ -1397,15 +1414,19 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             );
             const senderName = isCurrentUser ? "Você" : member?.name || "Membro";
             return (
-              <TedMessage
-                key={m.id}
-                message={m}
-                isCurrentUser={isCurrentUser}
-                senderName={m.role === "assistant" ? "TED" : senderName}
-                delivery={m.delivery}
-                // R2 FIX 1: failed de âncora legada não oferece retry.
-                onRetry={m.delivery === "failed" && m.retryable !== false ? () => handleRetry(m.id) : undefined}
-              />
+              <div key={m.id}>
+                <TedMessage
+                  message={m}
+                  isCurrentUser={isCurrentUser}
+                  senderName={m.role === "assistant" ? "TED" : senderName}
+                  delivery={m.delivery}
+                  // R2 FIX 1: failed de âncora legada não oferece retry.
+                  onRetry={m.delivery === "failed" && m.retryable !== false ? () => handleRetry(m.id) : undefined}
+                />
+                {/* ADR-033 S2: terminal, read-only result of an agent
+                    self-confirm — no TedApprovalCard, no Confirm/Cancel. */}
+                {!isCurrentUser && m.execution && <TedExecutionCard execution={m.execution} />}
+              </div>
             );
           })}
 

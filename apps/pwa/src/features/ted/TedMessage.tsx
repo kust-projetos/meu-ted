@@ -1,6 +1,6 @@
 "use client";
 
-import type { AgentMessage } from "@/lib/api/agent-client";
+import type { AgentMessage, SelfConfirmExecution, TerminalOutcome } from "@/lib/api/agent-client";
 import { TedMarkdown } from "./TedMarkdown";
 
 /**
@@ -9,6 +9,38 @@ import { TedMarkdown } from "./TedMarkdown";
  * bubble after a successful turn.
  */
 export type TedDeliveryState = "sending" | "sent" | "failed";
+
+/**
+ * ADR-033 S2: the self-confirm `execution` is projected onto the SAME terminal
+ * copy as the already-audited decision outcome — one source of truth for what
+ * "succeeded" / "failed" / "não verificado" means to the reader. The receipt is
+ * already canonical-validated at the client boundary; no attestation/hash is
+ * ever read from it here.
+ */
+const executionAsTerminalOutcome = (execution: SelfConfirmExecution): TerminalOutcome => {
+  if (execution.status === "succeeded") {
+    return {
+      operationId: execution.operationId,
+      tool: execution.tool,
+      status: "succeeded",
+      receipt: execution.receipt,
+      expectedContext: { tool: execution.tool },
+    };
+  }
+  if (execution.status === "failed") {
+    return {
+      operationId: execution.operationId,
+      tool: execution.tool,
+      status: "failed",
+      // `in_use` is a categories.deactivate-only verdict; never borrow its copy
+      // for a different tool just because the gateway echoed the code.
+      ...(execution.outcome.failureCode === "in_use" && execution.tool === "categories.deactivate"
+        ? { failureCode: "in_use" as const }
+        : {}),
+    };
+  }
+  return { operationId: execution.operationId, tool: execution.tool, status: "unverified" };
+};
 
 const terminalOutcomeText = (outcome: NonNullable<AgentMessage['terminalOutcome']>): string => {
   if (outcome.status === 'succeeded') {
@@ -106,6 +138,17 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
           {isAssistant && message.terminalOutcome && (
             <p role="note" aria-label="Resultado da operação" data-testid="ted-terminal-outcome" className={`mt-2 border-t border-border-subtle pt-2 text-xs font-semibold ${message.terminalOutcome.status === 'succeeded' ? 'text-primary' : 'text-text-secondary'}`}>
               {terminalOutcomeText(message.terminalOutcome)}
+            </p>
+          )}
+          {isAssistant && message.execution && (
+            <p
+              role="note"
+              aria-label="Resultado da operação"
+              data-testid="ted-execution-outcome"
+              data-execution-status={message.execution.status}
+              className={`mt-2 border-t border-border-subtle pt-2 text-xs font-semibold ${message.execution.status === 'succeeded' ? 'text-primary' : 'text-text-secondary'}`}
+            >
+              {terminalOutcomeText(executionAsTerminalOutcome(message.execution))}
             </p>
           )}
         </div>

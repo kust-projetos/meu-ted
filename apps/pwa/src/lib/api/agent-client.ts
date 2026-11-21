@@ -24,10 +24,14 @@ const historyItemSchema = z.object({
   // the authoritative pending operation so the PWA rehydrates the approval
   // card from SERVER state. Raw input — sanitized in the transform below.
   pendingOperation: z.unknown().optional(),
+  // ADR-033 S2: read-only self-confirm result echoed on a history item.
+  // Raw input — strict allowlist in the transform below (no attestation/hash).
+  execution: z.unknown().optional(),
 }).transform((item): AgentMessage => {
   const pendingOperation = sanitizePendingOperation(
     item.pendingOperation as AgentTurn["pendingOperation"],
   );
+  const execution = sanitizeSelfConfirmExecution(item.execution);
   const terminalOutcome = sanitizeTerminalOutcome(item.terminalOutcome, item.proposalOperationId, item.proposalTool);
   const proposalOperationId = z.string().uuid().safeParse(item.proposalOperationId);
   const proposalTool = typeof item.proposalTool === 'string' && (TED_APPROVAL_TOOLS as readonly string[]).includes(item.proposalTool) ? item.proposalTool : undefined;
@@ -42,7 +46,8 @@ const historyItemSchema = z.object({
     ...(proposalOperationId.success ? { proposalOperationId: proposalOperationId.data } : {}),
     ...(proposalTool ? { proposalTool } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
-    // Invalid/absent collapses to no card — never invented data.
+    // Invalid/absent collapses to no terminal state — never invented data.
+    ...(execution ? { execution } : {}),
     ...(pendingOperation === undefined ? {} : { pendingOperation }),
   };
 });
@@ -74,6 +79,11 @@ export type AgentMessage = {
    * invalid means `undefined` (no card), never invented data.
    */
   pendingOperation?: AgentTurn["pendingOperation"];
+  /**
+   * ADR-033 S2: terminal, read-only result of an agent self-confirmed
+   * operation (no Confirm/Cancel). Strictly sanitized at the boundary.
+   */
+  execution?: SelfConfirmExecution;
 };
 
 export function agentBaseUrl(): string {  // ADR-011: canonical browser transport is the same-origin proxy /api/agent.
@@ -261,6 +271,83 @@ function sanitizeTerminalOutcome(value: unknown, proposalOperationId: unknown, p
 }
 
 const APPROVAL_TOOLS = TED_APPROVAL_TOOLS as readonly string[];
+
+/**
+ * ADR-033 S2 — browser-safe projection of the gateway's agent self-confirm
+ * result. Strict allowlist: the only fields allowed to cross are the operation
+ * identity, the tool, the coarse terminal status, the (display-only) outcome
+ * and — for a PROVEN success only — the canonical receipt. No attestation,
+ * idempotency key, proposal hash or any other authority material is accepted:
+ * a single extra key drops the WHOLE value (fail closed, like every DTO here).
+ *
+ * `outcome.status` is echoed as an opaque string on purpose: the authoritative
+ * coarse status is `execution.status`; the model-owned text never becomes a
+ * success claim. `succeeded` without a canonical receipt whose `operationId`
+ * is the SAME one (and whose `mutationKind` is the SAME tool) is downgraded to
+ * `unverified` — never surfaced as success (ADR-033 decision 5).
+ */
+const selfConfirmOutcomeSchema = z
+  .object({
+    status: z.string().min(1),
+    failureCode: z.string().min(1).optional(),
+  })
+  .strict();
+
+const selfConfirmExecutionSchema = z
+  .object({
+    operationId: z.string().min(1),
+    tool: z.string().min(1),
+    status: z.enum(["succeeded", "failed", "unverified"]),
+    receipt: z.unknown().optional(),
+    outcome: selfConfirmOutcomeSchema,
+  })
+  .strict();
+
+export type SelfConfirmExecution = Readonly<
+  | {
+      operationId: string;
+      tool: string;
+      status: "succeeded";
+      receipt: PendingOperationReceipt;
+      outcome: { status: string; failureCode?: string };
+    }
+  | {
+      operationId: string;
+      tool: string;
+      status: "failed" | "unverified";
+      receipt?: never;
+      outcome: { status: string; failureCode?: string };
+    }
+>;
+
+export function sanitizeSelfConfirmExecution(value: unknown): SelfConfirmExecution | undefined {
+  const parsed = selfConfirmExecutionSchema.safeParse(value);
+  if (!parsed.success) return undefined;
+  const { operationId, tool, status, outcome } = parsed.data;
+  // An unknown tool can never produce a browser-visible financial success.
+  if (!APPROVAL_TOOLS.includes(tool)) {
+    return { operationId, tool, status: "unverified", outcome };
+  }
+  if (status === "succeeded") {
+    const receipt = sanitizeMutationReceipt(parsed.data.receipt);
+    if (
+      !receipt ||
+      receipt.status !== "succeeded" ||
+      receipt.operationId !== operationId ||
+      receipt.mutationKind !== tool
+    ) {
+      // The write may already have happened: park as unverified, never success.
+      return { operationId, tool, status: "unverified", outcome };
+    }
+    return { operationId, tool, status: "succeeded", receipt, outcome };
+  }
+  // failed/unverified carry no financial proof by contract. A receipt smuggled
+  // into a non-success terminal is not displayed and never reconciles anything.
+  if (parsed.data.receipt !== undefined) {
+    return { operationId, tool, status: "unverified", outcome };
+  }
+  return { operationId, tool, status, outcome };
+}
 
 const isAccountApprovalTool = (tool: string): boolean => tool.startsWith("accounts.");
 const isCategoryApprovalTool = (tool: string): boolean => tool.startsWith("categories.");
@@ -661,6 +748,13 @@ export type AgentTurn = {
    * payload. Strictly sanitized at the boundary.
    */
   proposal?: ProposalIntent;
+  /**
+   * ADR-033 S2: with self-confirm enabled the gateway executes in the same
+   * turn and returns this READ-ONLY terminal result INSTEAD of an actionable
+   * proposal. When the agent is unsure it returns text only (no proposal and
+   * no execution). Strictly sanitized; never carries attestation/hash.
+   */
+  execution?: SelfConfirmExecution;
   /**
    * debt-undo-confirmation-protocol: separate undo proposal (requestId for
    * the authenticated decision RPC). Display-only; the fixed target stays
@@ -1432,10 +1526,11 @@ export async function sendAgentMessage(
     else if (response.status === 403) err.code = "auth.workspace_forbidden";
     throw err;
   }
-  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown; proposal?: unknown };
+  const data = await response.json() as { turnId?: string; intentionId?: string; status?: string; output?: string; memorized?: string[]; pendingOperation?: unknown; undoProposal?: unknown; proposal?: unknown; execution?: unknown };
   const pendingOperation = sanitizePendingOperation(data.pendingOperation);
   const undoProposal = sanitizeUndoProposal(data.undoProposal as AgentTurn["undoProposal"]);
   const proposal = sanitizeProposalIntent(data.proposal);
+  const execution = sanitizeSelfConfirmExecution(data.execution);
   // The turn landed: the in-flight record is no longer needed. On failure
   // (including an unlinked succeeded receipt) it stays, so retry reuses the
   // same idempotent messageId.
@@ -1447,7 +1542,7 @@ export async function sendAgentMessage(
   // accepted it. The anchor keeps the intent here; TedChat clears it only
   // after the broker responds. A reload (or a lost broker response) can then
   // replay the EXACT same intentionId through the existing idempotent path.
-  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal || proposal);
+  const hasRealResult = Boolean(data.output?.trim() || pendingOperation || undoProposal || proposal || execution);
   if (hasRealResult) {
     if (proposal) {
       savePendingChatSend(workspaceId, {
@@ -1468,6 +1563,7 @@ export async function sendAgentMessage(
     ...(pendingOperation ? { pendingOperation } : {}),
     ...(undoProposal ? { undoProposal } : {}),
     ...(proposal ? { proposal } : {}),
+    ...(execution ? { execution } : {}),
   };
 }
 
