@@ -5,7 +5,7 @@
 - Este runtime é o runtime conversacional principal do Meu TED, atrás de um canário por workspace.
 - Container `ted-runtime` na VPS Contabo (Traefik, rota `https://api.synkroo.com.br/ted-runtime`), `TED_RUNTIME_PROFILE=live`, `TED_RUNTIME_IDENTITY=prod`.
 - Flags efetivas no compose: `TED_OPENCODE_P3_READS_ENABLED=1` e `TED_OPENCODE_P3_WRITES_ENABLED=1`; o catálogo exposto é 2 tools padrão + 17 leituras + 14 propostas intent-only (as propostas nunca chamam a API, nunca confirmam e nunca executam).
-- Canário da PWA: `TED_OPENCODE_RUNTIME_ENABLED=1` e `TED_OPENCODE_WORKSPACES` com dois workspaces (`d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`); apenas `chat`, `history` e `session/new` vão para este runtime — pending/undo/attachments continuam no A0.
+- Canário da PWA: `TED_OPENCODE_RUNTIME_ENABLED=1` e `TED_OPENCODE_WORKSPACES` com dois workspaces (`d36cb649-4462-486d-940a-47128ad329f2` e `550e8400-e29b-41d4-a716-446655440000`); `chat`, `history` e `session/new` vão para este runtime, que também serve as RPCs de pending/undo (`pending-operations` propose/active/decision e `undo` active/decision) — pending/undo **não** são servidos pelo A0. Attachments seguem fora do roteamento deste runtime.
 - Rollback: `TED_OPENCODE_RUNTIME_KILL_SWITCH=1` devolve todas as conversas ao A0.
 - A seção "Fatia P1" abaixo é registro histórico da entrega incremental, não o estado vigente.
 

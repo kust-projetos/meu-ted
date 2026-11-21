@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto';
 import { recordCatalog, getCatalog } from './category-catalog.mjs';
 import { findDuplicateCategory, isAutocreatableCategoryName } from './category-intelligence.mjs';
+import { ASSURANCE_SCHEMA, normalizeAssurance } from './self-confirm.mjs';
 
 const CATEGORY_MEMORY_TOOL = {
   name: 'recall_category_preference',
@@ -669,6 +670,20 @@ export const PROPOSAL_TOOL_SPECS = Object.freeze({
   propose_payable_pay: Object.freeze({ tool: 'payables.pay', noun: 'Pagamento de conta' }),
 });
 
+// Self-confirm (S1): every propose_* tool accepts an OPTIONAL `assurance`
+// declaration. With TED_AGENT_SELF_CONFIRM=1 a favorable declaration lets the
+// gateway confirm+execute in the same turn; with the flag OFF (the default)
+// the old intent-only card flow is unchanged and assurance is simply carried
+// as metadata. `assurance` is NEVER copied into normalizedArgs (the API's
+// Pending V2 payload stays byte-identical).
+const ASSURANCE_TOOL_HINT =
+  ' Quando os dados estiverem completos, explícitos e sem ambiguidade material, informe assurance={complete:true,ambiguousEntity:false,explicitIntent:true}: a operação é confirmada e executada diretamente. Diante de ambiguidade material ou dado faltante, pergunte em texto e não informe assurance favorável; nunca invente valores.';
+for (const def of TOOL_DEFS) {
+  if (!Object.hasOwn(PROPOSAL_TOOL_SPECS, def.name)) continue;
+  def.input.properties.assurance = ASSURANCE_SCHEMA;
+  if (!def.description.includes('assurance')) def.description = `${def.description}${ASSURANCE_TOOL_HINT}`;
+}
+
 // Canonical uuid shape (any version) — the API revalidates against its real
 // schema; this only stops the model from recording an obviously unusable id.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -686,37 +701,41 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 
 function knownKeys(name) {
-  if (name === 'correct_pending_proposal') return ['amountCents','date','description','categoryId','accountId','installmentsTotal'];
-  if (name === 'cancel_pending_proposal') return [];
-  if (name === 'recall_category_preference') return ['target', 'field'];
-  if (name === 'list_accounts') return ['kind', 'includeInactive'];
-  if (name === 'list_recent_transactions') return ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
-  if (name === 'spending_insights') return ['yearMonth', 'insightType', 'lookbackMonths'];
-  if (name === 'analytics_kpis' || name === 'analytics_cashflow_series') return ['period', 'from', 'to', 'accountId', 'basis'];
-  if (name === 'analytics_category_breakdown') return ['period', 'from', 'to', 'accountId', 'basis', 'kind'];
-  if (name === 'analytics_net_worth_history') return ['accountId'];
-  if (name === 'analytics_budget_consumption') return [];
-  if (name === 'budget_trends') return ['budgetId', 'monthsBack'];
-  if (name === 'list_payables') return ['status', 'type', 'dueWithinDays'];
-  if (name === 'list_audit_logs') return ['limit', 'operation', 'eventType', 'actorType', 'entityType', 'entityId'];
-  if (name === 'list_budgets' || name === 'check_budgets' || name === 'list_goals' || name === 'payable_reminders') return [];
-  if (name === 'list_credit_cards') return [];
-  if (name === 'list_categories') return ['kind'];
-  if (name === 'list_card_statements') return ['accountId', 'status', 'limit'];
-  if (name === 'propose_statement_payment') return ['statementId', 'fromAccountId', 'amountCents'];
-  if (name === 'propose_transaction_update') return ['transactionId', 'description', 'expectedDescription'];
-  if (name === 'propose_account_update') return ['accountId', 'name', 'expectedName'];
-  if (name === 'propose_account_deactivate') return ['accountId', 'accountName'];
-  if (name === 'propose_category_update') return ['categoryId', 'name', 'expectedName'];
-  if (name === 'propose_category_deactivate') return ['categoryId', 'expectedName'];
-  if (name === 'propose_payable_create') return ['accountId', 'description', 'amountCents', 'dueDate', 'categoryId'];
-  if (name === 'propose_payable_pay') return ['payableId', 'description', 'amountCents', 'dueDate', 'accountId', 'paidDate'];
-  if (name === 'propose_account_create') return ['name', 'kind', 'initialBalanceCents'];
-  if (name === 'propose_category_create') return ['name', 'kind', 'parentId'];
-  if (name === 'propose_transfer') return ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
-  if (name === 'propose_card_purchase') return ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
-  if (name === 'propose_expense' || name === 'propose_income') return ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
-  return ['yearMonth'];
+  let keys;
+  if (name === 'correct_pending_proposal') keys = ['amountCents','date','description','categoryId','accountId','installmentsTotal'];
+  else if (name === 'cancel_pending_proposal') keys = [];
+  else if (name === 'recall_category_preference') keys = ['target', 'field'];
+  else if (name === 'list_accounts') keys = ['kind', 'includeInactive'];
+  else if (name === 'list_recent_transactions') keys = ['accountId', 'categoryId', 'kind', 'startDate', 'endDate', 'minAmountCents', 'maxAmountCents', 'query', 'limit', 'offset'];
+  else if (name === 'spending_insights') keys = ['yearMonth', 'insightType', 'lookbackMonths'];
+  else if (name === 'analytics_kpis' || name === 'analytics_cashflow_series') keys = ['period', 'from', 'to', 'accountId', 'basis'];
+  else if (name === 'analytics_category_breakdown') keys = ['period', 'from', 'to', 'accountId', 'basis', 'kind'];
+  else if (name === 'analytics_net_worth_history') keys = ['accountId'];
+  else if (name === 'analytics_budget_consumption') keys = [];
+  else if (name === 'budget_trends') keys = ['budgetId', 'monthsBack'];
+  else if (name === 'list_payables') keys = ['status', 'type', 'dueWithinDays'];
+  else if (name === 'list_audit_logs') keys = ['limit', 'operation', 'eventType', 'actorType', 'entityType', 'entityId'];
+  else if (name === 'list_budgets' || name === 'check_budgets' || name === 'list_goals' || name === 'payable_reminders') keys = [];
+  else if (name === 'list_credit_cards') keys = [];
+  else if (name === 'list_categories') keys = ['kind'];
+  else if (name === 'list_card_statements') keys = ['accountId', 'status', 'limit'];
+  else if (name === 'propose_statement_payment') keys = ['statementId', 'fromAccountId', 'amountCents'];
+  else if (name === 'propose_transaction_update') keys = ['transactionId', 'description', 'expectedDescription'];
+  else if (name === 'propose_account_update') keys = ['accountId', 'name', 'expectedName'];
+  else if (name === 'propose_account_deactivate') keys = ['accountId', 'accountName'];
+  else if (name === 'propose_category_update') keys = ['categoryId', 'name', 'expectedName'];
+  else if (name === 'propose_category_deactivate') keys = ['categoryId', 'expectedName'];
+  else if (name === 'propose_payable_create') keys = ['accountId', 'description', 'amountCents', 'dueDate', 'categoryId'];
+  else if (name === 'propose_payable_pay') keys = ['payableId', 'description', 'amountCents', 'dueDate', 'accountId', 'paidDate'];
+  else if (name === 'propose_account_create') keys = ['name', 'kind', 'initialBalanceCents'];
+  else if (name === 'propose_category_create') keys = ['name', 'kind', 'parentId'];
+  else if (name === 'propose_transfer') keys = ['amountCents', 'description', 'date', 'fromAccountId', 'toAccountId'];
+  else if (name === 'propose_card_purchase') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId', 'installmentsTotal'];
+  else if (name === 'propose_expense' || name === 'propose_income') keys = ['amountCents', 'description', 'date', 'accountId', 'categoryId'];
+  else keys = ['yearMonth'];
+  // Self-confirm assurance is metadata only: accepted here, stripped from
+  // normalizedArgs by the propose() executor below.
+  return Object.hasOwn(PROPOSAL_TOOL_SPECS, name) ? [...keys, 'assurance'] : keys;
 }
 
 // Validates structure only. Domain validation (kind enum, yearMonth format)
@@ -1422,6 +1441,15 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
       throw new ToolError('host_context_required', `${name}: host-bound session context is required — hostless execution is blocked by design`);
     }
     const safe = validateToolArgs(name, args);
+    // Assurance is declaration metadata, never an API field: a malformed or
+    // omitted declaration is carried as `null` so the gateway (flag ON) can
+    // refuse to execute and fall back to a text question. With the flag OFF
+    // it is inert and the old card flow is unchanged.
+    const assurance = args.assurance === undefined ? undefined : normalizeAssurance(args.assurance);
+    const recordIntent = (intent) => proposalIntents.record(opts.sessionID, {
+      ...intent,
+      ...(assurance === undefined ? {} : { assurance }),
+    });
     if (name === 'propose_category_create' && process.env.TED_OPENCODE_CATEGORY_AUTOCREATE_ENABLED === '1') {
       const catalog = getCatalog(opts.sessionID);
       if (!catalog) throw new ToolError('tool.invalid_args', 'propose_category_create: chame list_categories antes de propor a criação');
@@ -1441,7 +1469,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         amountCents: safe.amountCents,
       };
       const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)}`;
-      proposalIntents.record(opts.sessionID, {
+      recordIntent({
         tool: spec.tool,
         intentionId,
         summary,
@@ -1458,7 +1486,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         initialBalanceCents: safe.initialBalanceCents,
       };
       const summary = `Conta "${normalizedArgs.name}" (${normalizedArgs.kind})`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_category_create') {
@@ -1471,7 +1499,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         ...(safe.parentId !== undefined ? { parentId: safe.parentId } : {}),
       };
       const summary = `Categoria "${normalizedArgs.name}" (${normalizedArgs.kind})`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_payable_create') {
@@ -1483,7 +1511,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         ...(safe.categoryId !== undefined ? { categoryId: safe.categoryId } : {}),
       };
       const summary = `Conta a pagar de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_payable_pay') {
@@ -1496,7 +1524,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         ...(safe.paidDate !== undefined ? { paidDate: safe.paidDate } : {}),
       };
       const summary = `Pagar conta "${normalizedArgs.description}" de ${formatBRL(normalizedArgs.amountCents)}`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_transaction_update') {
@@ -1506,7 +1534,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         expectedDescription: safe.expectedDescription,
       };
       const summary = `Alterar descrição de "${normalizedArgs.expectedDescription}" para "${normalizedArgs.description}"`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_account_update' || name === 'propose_category_update') {
@@ -1515,7 +1543,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         : { categoryId: safe.categoryId, name: safe.name.trim(), expectedName: safe.expectedName };
       const noun = name === 'propose_account_update' ? 'conta' : 'categoria';
       const summary = `Renomear ${noun} de "${normalizedArgs.expectedName}" para "${normalizedArgs.name}"`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_account_deactivate') {
@@ -1526,13 +1554,13 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         ...(safe.accountName !== undefined ? { accountName: safe.accountName.trim() } : {}),
       };
       const summary = `Desativar conta${normalizedArgs.accountName ? ` "${normalizedArgs.accountName}"` : ''}`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     if (name === 'propose_category_deactivate') {
       const normalizedArgs = { categoryId: safe.categoryId, expectedName: safe.expectedName };
       const summary = `Desativar categoria "${normalizedArgs.expectedName}"`;
-      proposalIntents.record(opts.sessionID, { tool: spec.tool, intentionId, summary, normalizedArgs });
+      recordIntent({ tool: spec.tool, intentionId, summary, normalizedArgs });
       return { status: 'proposed', summary };
     }
     const date = safe.date ?? new Date().toISOString().slice(0, 10);
@@ -1552,7 +1580,7 @@ export function createToolExecutors(transport, { proposalIntents, correctionActi
         ...(safe.installmentsTotal !== undefined ? { installmentsTotal: safe.installmentsTotal } : {}),
       };
     const summary = `${spec.noun} de ${formatBRL(normalizedArgs.amountCents)} em "${normalizedArgs.description}"`;
-    proposalIntents.record(opts.sessionID, {
+    recordIntent({
       tool: spec.tool,
       intentionId,
       summary,

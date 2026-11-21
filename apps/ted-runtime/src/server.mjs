@@ -64,6 +64,13 @@ import { proposeIdempotencyKey, PendingClientError } from './pending-client.mjs'
 import { attestEmptyWorkspace, WorkspaceAttestationError } from './workspace-attestation.mjs';
 import { correctionActionRegistry } from './correction-actions.mjs';
 import { projectActivePendingOperations } from './active-projection.mjs';
+import {
+  createSelfConfirmExecutor,
+  isActionableAssurance,
+  executionOutput,
+  SELF_CONFIRM_CLARIFICATION,
+  SELF_CONFIRM_NOT_ACTIONABLE,
+} from './self-confirm.mjs';
 
 export const GATEWAY_BODY_LIMIT_BYTES = 64 * 1024;
 export const GATEWAY_REQUEST_TIMEOUT_MS = 30000;
@@ -303,6 +310,7 @@ export function createGatewayServer({
   autoExecClient = null,
   categoryAutoExecClient = null,
   autoExecEnabled = false,
+  selfConfirmEnabled = false,
   correctionActions = correctionActionRegistry,
   categoryMemoryDbPath,
   pendingClient = null,
@@ -320,6 +328,10 @@ export function createGatewayServer({
   const categoryMemoryStore = categoryMemoryStoreOverride || (categoryMemoryEnabled ? openCategoryMemoryStore({ dbPath: categoryMemoryDbPath }) : null);
   const undoProposals = undoStore || createUndoStore({ persistDir: stateDir || process.cwd() });
   const turnIntentionBySession = new Map();
+  // S1: fail-closed by construction. Only a literal boolean true (the flag
+  // parse in main.mjs is strict '1') enables the same-turn confirm+execute.
+  const selfConfirm = selfConfirmEnabled === true;
+  const selfConfirmExecutor = createSelfConfirmExecutor({ client: pendingClient });
   void bindAuthenticatedSession; // legacy seam: accepted, never invoked (unsafe path retired)
   const hasSafeWrapper = typeof withAuthenticatedSession === 'function';
   function requireSafeWrapper() {
@@ -810,7 +822,9 @@ export function createGatewayServer({
       let proposalForAutoexec = null;
       let canAutoexec = false;
       let proposalObserved = false;
-      if (autoExecEnabled && pin.pin === 'b' && !correctionCandidate) {
+      // Self-confirm owns the whole propose_* family (category creation
+      // included) — never let the legacy scoped autoexec spend the same intent.
+      if (autoExecEnabled && !selfConfirm && pin.pin === 'b' && !correctionCandidate) {
         proposalForAutoexec = proposalIntents.peek(runtimeSessionId);
         proposalObserved = !!proposalForAutoexec;
         if (proposalForAutoexec) {
@@ -872,14 +886,53 @@ export function createGatewayServer({
       }
       turnIntentionBySession.delete(runtimeSessionId);
       record = store.noteTurn(record.conversationId);
-      // Hand the intent off exactly once, on a settled successful turn. The
-      // PWA POSTs it to the Agent broker; the gateway never mints, never
-      // confirms, never executes.
+      // Hand the intent off exactly once, on a settled successful turn.
+      // Flag OFF (default): the PWA POSTs it to the Agent broker; the gateway
+      // never mints, never confirms, never executes — byte-identical to before.
+      // Flag ON + favorable assurance: mint → propose → confirm → execute →
+      // outcome in this same turn, with an `execution` receipt instead of an
+      // actionable card. No attestation is ever exposed.
       const proposalIntent = proposalIntents.take(runtimeSessionId);
       proposalObserved = proposalObserved || !!proposalIntent;
       let deliveredProposal = proposalIntent;
       let autoexec;
       let executedOutput = null;
+      let execution = null;
+      let selfConfirmNote = null;
+      if (selfConfirm && proposalIntent && !correctionCandidate) {
+        if (!isActionableAssurance(proposalIntent.assurance)) {
+          // Missing/malformed/unfavorable declaration: no pipeline, no card,
+          // no false success — ask in text for the missing/ambiguous datum.
+          deliveredProposal = null;
+          selfConfirmNote = SELF_CONFIRM_CLARIFICATION;
+        } else {
+          const result = await selfConfirmExecutor.run({
+            identity: {
+              workspaceId: identity.workspace,
+              actorId: identity.actorId,
+              deviceId: identity.deviceId,
+            },
+            intentionId: body.intentionId,
+            intent: proposalIntent,
+            signal,
+          });
+          if (result.kind === 'not_actionable') {
+            // 409 approval.not_actionable: no operation was created; fall
+            // back to a text clarification, never claim execution.
+            deliveredProposal = null;
+            selfConfirmNote = SELF_CONFIRM_NOT_ACTIONABLE;
+          } else if (result.kind === 'execution') {
+            execution = result.execution;
+            deliveredProposal = null;
+            executedOutput = executionOutput(execution.status, proposalIntent.summary);
+          } else {
+            // Pipeline unavailable/errored before execute: never a card that
+            // looks executed and never a success claim — ask the user.
+            deliveredProposal = null;
+            selfConfirmNote = SELF_CONFIRM_CLARIFICATION;
+          }
+        }
+      }
       if (autoexecResult?.status === 'executed') {
           autoexec = { status: 'executed' };
           deliveredProposal = null;
@@ -896,8 +949,10 @@ export function createGatewayServer({
         console.warn('category autoexec left pending:', autoexecResult.reason || 'unknown');
       }
       return { ...started, ...(executedOutput ? { output: executedOutput } : {}), proposalObserved,
+        ...(selfConfirmNote ? { output: `${started.output || ''}\n\n${selfConfirmNote}`.trim() } : {}),
         ...(correctionFailureNote ? { output: `${started.output || ''}\n\nNão consegui aplicar o ajuste agora; a proposta segue como estava.`.trim() } : {}),
-        ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}) };
+        ...(correctionCandidate ? {} : deliveredProposal ? { proposal: deliveredProposal } : {}), ...(autoexec ? { autoexec } : {}),
+        ...(execution ? { execution } : {}) };
     }).catch((e) => ({ __error: e }));
 
     // Turn finish observation: success carries `none`; failures classify
@@ -928,6 +983,7 @@ export function createGatewayServer({
         proposalObserved: outcome.proposalObserved,
         ...(outcome.proposal ? { proposal: outcome.proposal } : {}),
         ...(outcome.autoexec ? { autoexec: outcome.autoexec } : {}),
+        ...(outcome.execution ? { execution: outcome.execution } : {}),
       },
       setCookie: pin.pin === 'b' ? null : record.conversationId,
       previousSessionId,

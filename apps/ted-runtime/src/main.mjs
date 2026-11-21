@@ -74,6 +74,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
     assertLoopbackApiOrigin = (await import('./gateway.mjs')).assertLoopbackApiOrigin,
     parseAllowedApiOrigins = (await import('./gateway.mjs')).parseAllowedApiOrigins,
     HttpFinanceTransport = (await import('./transport.mjs')).HttpFinanceTransport,
+    isSelfConfirmEnabled = (await import('./self-confirm.mjs')).isSelfConfirmEnabled,
   } = deps;
 
   const home = readEnv('TED_RUNTIME_HOME', DEFAULT_HOME);
@@ -107,6 +108,9 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
   // read here so the resolved value is forwarded explicitly to the env boot.
   const profile = readEnv('TED_RUNTIME_PROFILE', 'test');
   const autoExecEnabled = readEnv('TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED', '') === '1';
+  // Strict '1' parse only (same pattern as the other flags); absent/anything
+  // else keeps the legacy card flow. `env` overrides process.env per key.
+  const selfConfirmEnabled = isSelfConfirmEnabled({ ...process.env, ...env });
   const autoExecServiceToken = readEnv('TED_RUNTIME_AUTOEXEC_MINT_TOKEN', '');
   const categoryAutoExecMintToken = readEnv('TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN', '');
   const pendingMintToken = readEnv('TED_PENDING_MINT_TOKEN', '');
@@ -174,6 +178,7 @@ export async function startTedRuntime({ env = {}, deps = {}, diagnosticsSink } =
       workspaceDeletionSecret,
       stateDir: tedEnv.dirs.state,
       autoExecEnabled,
+      selfConfirmEnabled,
       createRuntimeSession: async () => ({ runtimeSessionId: await tedEnv.serverOps.createNativeSession() }),
       withAuthenticatedSession: (sessionID, host, fn, opts) =>
         tedEnv.serverOps.withAuthenticatedSession(sessionID, host, fn, {

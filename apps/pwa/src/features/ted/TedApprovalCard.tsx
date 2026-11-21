@@ -10,6 +10,7 @@ import {
   type PendingOperationDecision,
   type PendingOperationPresentation,
   type PendingOperationStatus,
+  type SelfConfirmExecution,
 } from "@/lib/api/agent-client";
 
 export type TedPendingOperation = Readonly<{
@@ -122,6 +123,63 @@ const APPROVAL_STATUS_RANK: Readonly<Record<TedPendingOperation["status"], numbe
   cancelled: 2,
   expired: 2,
 };
+
+/**
+ * ADR-033 S2 — read-only terminal projection of an agent self-confirmed
+ * operation. Lives beside the approval card (shares its copy and visual
+ * language) but is deliberately NOT the approval card: there is no
+ * `decidePendingOperation`, no Confirm/Cancel/Retry and no receipt-id or hash
+ * is rendered. The receipt was already canonical-validated at the client
+ * boundary; a missing/mismatched receipt never reaches this component as
+ * `succeeded` (it is degraded to `unverified` by `sanitizeSelfConfirmExecution`).
+ */
+export function TedExecutionCard({ execution }: { execution: SelfConfirmExecution }) {
+  const label = deriveFallbackTitle({
+    id: execution.operationId,
+    status: "succeeded",
+    operation: execution.tool,
+  });
+
+  if (execution.status === "succeeded") {
+    return (
+      <div
+        role="status"
+        data-testid="ted-execution-card"
+        data-execution-status="succeeded"
+        className="my-2 rounded-[14px] border border-border-subtle bg-surface-2 p-3 text-xs text-text-secondary"
+      >
+        <strong className="text-primary">✅ Operação registrada: {label}</strong>
+        <div className="mt-0.5">Recibo validado — conclusão confirmada. Nada mais precisa ser aprovado.</div>
+      </div>
+    );
+  }
+
+  if (execution.status === "failed") {
+    return (
+      <div
+        role="status"
+        data-testid="ted-execution-card"
+        data-execution-status="failed"
+        className="my-2 rounded-[14px] border border-danger/30 bg-danger-tint p-3 text-xs text-danger"
+      >
+        <strong>Não foi possível concluir a operação — {describePendingOperationStatus("failed")}.</strong>
+        <div className="mt-0.5">{label}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="status"
+      data-testid="ted-execution-card"
+      data-execution-status="unverified"
+      className="my-2 rounded-[14px] border border-warning/30 bg-warning-tint p-3 text-xs text-text-secondary"
+    >
+      <strong className="text-warning">⏳ Não foi possível verificar a conclusão: {label}</strong>
+      <div className="mt-0.5">Atualize o estado antes de tomar outra decisão.</div>
+    </div>
+  );
+}
 
 export function TedApprovalCard({ operation, workspaceId, onResolved }: TedApprovalCardProps) {
   const [loading, setLoading] = useState(false);

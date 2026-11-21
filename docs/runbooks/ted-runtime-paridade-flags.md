@@ -74,6 +74,14 @@ backup `docker-compose.yml.bak-pre-category-flip` ou a tag
 | `TED_OPENCODE_CATEGORY_MEMORY_ENABLED` | `1` | processo TED Runtime | Habilita store SQLite local e tool de recall. |
 | `TED_OPENCODE_CATEGORY_AUTOEXEC_ENABLED` | `1` | processo TED Runtime + API elegível | Permite autoexecução de categoria, atualmente apenas `categories.create`, via API. |
 | `TED_RUNTIME_CATEGORY_AUTOEXEC_MINT_TOKEN` | credencial, não flag; mínimo de 32 caracteres | perfil/ambiente do processo-filho | Credencial dedicada à jornada de categorias; usa `mintPath='/auth/agent/category-autoexec-token'` e o header `x-agent-category-autoexec-service-token`. O token global `TED_RUNTIME_AUTOEXEC_MINT_TOKEN` permanece ausente. Nunca grave credenciais em repositório ou instruções. |
+| `TED_AGENT_SELF_CONFIRM` | `1` | processo TED Runtime (gateway) | Confirmação e execução de Pending V2 pelo agente na mesma volta do turno, sob `assurance` favorável; padrão off (card Confirmar/Cancelar). Ver decisão em [ADR-033](../adr/ADR-033-agente-confirma-pending-v2.md). |
+
+### `TED_AGENT_SELF_CONFIRM` (confirmação pelo agente)
+
+- **Padrão:** `off`. A flag ausente ou diferente de `1` mantém o fluxo com card Confirmar/Cancelar idêntico ao baseline; o compose não define esta variável.
+- **Efeito (`1`):** o gateway `apps/ted-runtime` confirma e executa a proposta Pending V2 na mesma volta do turno, usando o token delegado do usuário que já possui, quando a `assurance` enviada pelas tools `propose_*` (`complete`, `ambiguousEntity`, `explicitIntent`) é favorável. Com dúvida/ambiguidade material o gateway não executa e devolve a pergunta em texto, sem card. O gate `requireActionablePresentation` da API continua valendo: label não resolvido ⇒ 409 `approval.not_actionable` ⇒ sem execução e fallback para pergunta/card. Resultado incerto nunca vira sucesso; reconcile e undo permanecem. Não há mudança de contrato na API e o modelo nunca recebe credencial, capability, hash ou `operationId`.
+- **Reverter:** defina `TED_AGENT_SELF_CONFIRM=0` (ou remova a variável) no ambiente do gateway e redeploy. Volta o fluxo com card; API, ledger e dados não são alterados.
+- **Autorização:** ligar em produção é decisão explícita do operador; este runbook não autoriza a ativação. Plano: [confirmação feita pelo agente](../plans/2026-11-20-ted-agent-self-confirm/PLAN.md).
 
 ### Valores no compose TED Runtime
 
