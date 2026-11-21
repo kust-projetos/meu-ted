@@ -207,6 +207,8 @@ describe("TedChat — execution (ADR-033 S2)", () => {
         id: "op-legacy",
         tool: "transactions.expense.create",
         status: "proposed",
+        createdAt: "2026-11-20T00:00:00.000Z",
+        expiresAt: "2099-01-01T00:00:00.000Z",
         presentation: {
           id: "op-legacy",
           status: "proposed",

@@ -13,7 +13,7 @@ const RECEIPT = {
   mutationId: "mut-1",
   mutationKind: "transactions.expense.create" as const,
   status: "succeeded" as const,
-  affectedTargets: ["transactions"],
+  affectedTargets: ["transactions" as const],
   operationId: "op-1",
   entity: { type: "transaction" as const, id: "tx-1" },
 };
