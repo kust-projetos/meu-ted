@@ -131,8 +131,9 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
           }`}
         >
           {/* R05/AC11: markdown restrito SÓ para o assistente; usuário e
-              membro continuam texto literal (nada de interpretá-los). */}
-          <div className="whitespace-pre-wrap break-words">
+              membro continuam texto literal (nada de interpretá-los).
+              `text-pretty` evita linha órfã (ex.: uma emoji sozinha no fim). */}
+          <div className="whitespace-pre-wrap break-words text-pretty">
             {isAssistant ? <TedMarkdown content={message.content} /> : message.content}
           </div>
           {isAssistant && message.terminalOutcome && (

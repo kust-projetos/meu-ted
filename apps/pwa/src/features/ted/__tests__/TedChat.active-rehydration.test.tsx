@@ -4,7 +4,8 @@
  * Presentation is the canonical server-derived DTO.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@/lib/test-utils";
+import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor } from "@/lib/test-utils";
 import { TedChat } from "../TedChat";
 import * as agentClient from "@/lib/api/agent-client";
 
@@ -132,7 +133,7 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     expect(screen.queryByRole("button", { name: /Confirmar R\$/i })).not.toBeInTheDocument();
   });
 
-  it("active list failure on first load is honest: no card, error signal, history intact", async () => {
+  it("active list failure degrades silently: no error banner, no card, history intact", async () => {
     vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
       { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
     ]);
@@ -141,7 +142,37 @@ describe("FIX-P1 RED: TedChat reload from active list", () => {
     render(<TedChat />);
 
     expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
-    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalled());
+    // Deixa o catch da RPC active rodar antes de afirmar a ausência da faixa.
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Não foi possível carregar as aprovações agora.")).toBeNull();
     expect(screen.queryByRole("button", { name: /aprovar|confirmar/i })).toBeNull();
+  });
+
+  it("não mostra a mensagem de aprovações nem após uma nova recarga", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentClient.fetchAgentHistory).mockResolvedValue([
+      { id: "msg-1", actorId: "user-1", role: "user", content: "Meu saldo?", isOwn: true, createdAt: undefined },
+    ]);
+    vi.mocked(agentClient.fetchActivePendingOperations).mockRejectedValue(new Error("down"));
+
+    render(<TedChat />);
+    expect(await screen.findByText("Meu saldo?")).toBeInTheDocument();
+
+    // Envio bem-sucedido dispara nova recarga: a falha da lista active
+    // continua silenciosa (nenhuma faixa vermelha "aprovações").
+    vi.mocked(agentClient.sendAgentMessage).mockResolvedValueOnce({
+      turnId: "t1",
+      status: "completed",
+      output: "Olá! Como posso ajudar?",
+    });
+    await user.type(screen.getByPlaceholderText("Pergunte sobre gastos, metas ou pagamentos…"), "Olá");
+    await user.click(screen.getByRole("button", { name: /enviar mensagem/i }));
+
+    await waitFor(() => expect(agentClient.fetchActivePendingOperations).toHaveBeenCalledTimes(2));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByText("Não foi possível carregar as aprovações agora.")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

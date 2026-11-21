@@ -797,7 +797,10 @@ function renderBlock(block: TedBlockNode, index: number): ReactNode {
   const key = `${block.kind}-${index}`;
   switch (block.kind) {
     case "paragraph":
-      return <p key={key}>{renderInline(block.children)}</p>;
+      // Espaçamento entre parágrafos (o bubble é contínuo; sem isso os blocos
+      // ficam colados e a leitura de respostas com múltiplos parágrafos cansa).
+      // `text-pretty` evita linha órfã — inclusive uma emoji sozinha no fim.
+      return <p key={key} className="mb-2 last:mb-0 text-pretty">{renderInline(block.children)}</p>;
     case "heading":
       return (
         <p key={key} role="heading" aria-level={block.level} className={HEADING_CLASSES[block.level]}>
