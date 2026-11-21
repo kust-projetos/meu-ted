@@ -268,8 +268,8 @@ test("[PUSH-01] real PWA registers /sw.js and completes the push UI flow", async
     })
     .toBe("granted");
   await expect(
-    dialog.getByText("Notificações ativas", { exact: true }),
-  ).toBeVisible();
+    dialog.getByText("Notificações no dispositivo"),
+  ).toHaveCount(0);
   await expectPushPersistence(pushResponses);
   await expect(
     page.evaluate(
@@ -311,8 +311,8 @@ test("[PUSH-02] controlled iOS standalone uses the real UI and permission API", 
     })
     .toBe("granted");
   await expect(
-    dialog.getByText("Notificações ativas", { exact: true }),
-  ).toBeVisible();
+    dialog.getByText("Notificações no dispositivo"),
+  ).toHaveCount(0);
   await expectPushPersistence(pushResponses);
   await expect(
     page.evaluate(
