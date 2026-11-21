@@ -33,9 +33,9 @@ export default function ReportsPage() {
   return (
     <div className="flex min-h-dvh flex-col bg-bg">
       <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+      <main className="flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
         <PageHeader title="Relatórios" />
-        <div className="flex flex-col gap-3.5 px-5 pt-3">
+        <div className="flex flex-col gap-3.5 px-5 pt-3 sm:px-8 lg:px-12">
           <ReportsAnalyticsZone accounts={accounts.map((a) => ({ id: a.id, name: a.name }))} />
         </div>
 

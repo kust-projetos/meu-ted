@@ -850,8 +850,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     loadedRef.current = true;
 
     let cancelled = false;
+    let settled = false;
 
     const load = async () => {
+      try {
       // Session-first: online auth rides the cookie (+ compat bearer) in
       // apiFetch — no storage token required. Phase 3 (AUTH-02): the V3
       // identity comes from the validated session authority (principal) +
@@ -1044,11 +1046,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           setError(cause instanceof Error ? cause.message : "Erro ao carregar dados.");
         }
       }
+      } finally {
+        if (!cancelled) settled = true;
+      }
     };
 
     load();
     return () => {
       cancelled = true;
+      if (!settled) loadedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapDispatch]);
@@ -1079,8 +1085,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     loadedRef.current = true;
 
     let cancelled = false;
+    let settled = false;
 
     const loadOffline = async () => {
+      try {
       if (offlineEntryIncoherent) {
         bootstrapDispatch({ type: "BOOTSTRAP_START" });
         for (const domain of ALL_DOMAINS) {
@@ -1135,11 +1143,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       } catch {
         if (!cancelled) setLoading(false);
       }
+      } finally {
+        if (!cancelled) settled = true;
+      }
     };
 
     void loadOffline();
     return () => {
       cancelled = true;
+      if (!settled) loadedRef.current = false;
     };
   }, [bootstrapDispatch, preloadV3Snapshot]);
 

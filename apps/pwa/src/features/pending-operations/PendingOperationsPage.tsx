@@ -43,7 +43,7 @@ function OpenInTedButton({ label }: { label?: string }) {
   );
 }
 
-export default function PendingOperationsPage() {
+export default function PendingOperationsPage({ embedded = false }: { embedded?: boolean }) {
   const [undoLoading, setUndoLoading] = useState(false);
   const [undoResult, setUndoResult] = useState<string | null>(null);
   const [undoError, setUndoError] = useState<string | null>(null);
@@ -88,11 +88,15 @@ export default function PendingOperationsPage() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <PageHeader title="Aprovações" />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && (
+        <>
+          <StatusBar />
+          <PageHeader title="Aprovações" />
+        </>
+      )}
 
-      <main className="flex flex-1 flex-col gap-3 px-5 pb-[var(--tab-bar-height)] sm:px-8 lg:px-12">
+      <main className={embedded ? "flex flex-1 flex-col gap-3 px-5 pt-4 sm:px-8 lg:px-12" : "flex flex-1 flex-col gap-3 px-5 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:px-8 lg:px-12 lg:pb-8"}>
         {/* Honest error state: the listing is authoritative — when it cannot
             be loaded we say so and offer a retry; never stale, never invented. */}
         {error && (

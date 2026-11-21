@@ -242,7 +242,7 @@ test("[NAV-04] BottomNav Relatórios click navigates to /hub/relatorios", async 
 // NAV-05..08: FAB quick-action group
 // ═══════════════════════════════════════════════════════════════════════════
 
-test("[NAV-05] FAB opens the quick-action group with 4 actions", async ({ page }) => {
+test("[NAV-05] FAB opens the quick-action group with 3 actions", async ({ page }) => {
   const id = tid("nav"); const guard = await setup(page, id);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
@@ -250,7 +250,7 @@ test("[NAV-05] FAB opens the quick-action group with 4 actions", async ({ page }
   await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
   const actions = page.getByRole("group", { name: "Ações de novo lançamento" });
   await expect(actions).toBeVisible({ timeout: 5000 });
-  await expect(actions.getByRole("button")).toHaveCount(4);
+  await expect(actions.getByRole("button")).toHaveCount(3);
   assertNoUndeclaredFailures(guard);
 });
 
@@ -265,30 +265,16 @@ test("[NAV-06] quick menu Despesa opens the preselected expense sheet", async ({
   assertNoUndeclaredFailures(guard);
 });
 
-test("[NAV-07] quick action Ler Comprovante opens the capture expense sheet", async ({ page }) => {
+test("[NAV-07] quick actions omit removed Ler Comprovante and open Receita sheet", async ({ page }) => {
   const id = tid("nav"); const guard = await setup(page, id);
-  await page.route("**/finance-chat-agent/**/rpc/history*", async (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ items: [], total: 0 }),
-    }),
-  );
-  await page.route("**/finance-chat-agent/**/rpc/undo/active*", async (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ items: [], total: 0 }),
-    }),
-  );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/"); await registerDevice(page);
 
   await page.locator('nav[data-nav="bottom"]').getByRole("button", { name: "Novo lançamento" }).click({ timeout: 5000 });
-  await page.getByRole("group", { name: "Ações de novo lançamento" }).getByRole("button", { name: "Ler Comprovante", exact: true }).click({ timeout: 5000 });
-  // Ler Comprovante routes directly to the TED assistant with receipt context.
-  await expect(page.getByRole("region", { name: /Chat com TED/i })).toBeVisible({ timeout: 5000 });
-  await expect(page).toHaveURL(/\/ted(\?from=comprovante)?$/);
+  const actions = page.getByRole("group", { name: "Ações de novo lançamento" });
+  await expect(actions.getByRole("button", { name: "Ler Comprovante", exact: true })).toHaveCount(0);
+  await actions.getByRole("button", { name: "Receita", exact: true }).click({ timeout: 5000 });
+  await expect(page.getByText("Nova receita")).toBeVisible({ timeout: 5000 });
   assertNoUndeclaredFailures(guard);
 });
 
@@ -312,7 +298,8 @@ async function navigateFromHub(
   label: string,
   expectedPath: RegExp,
 ): Promise<void> {
-  await page.getByRole("button", { name: "Explorar" }).click({ timeout: 5000 });
+  await page.getByRole("button", { name: "Abrir menu" }).click({ timeout: 5000 });
+  await page.getByRole("link", { name: /Explorar todos os módulos/i }).click({ timeout: 5000 });
   await expect(page).toHaveURL(/\/hub$/);
   await page.getByRole("link", { name: new RegExp(label) }).click({ timeout: 5000 });
   await expect(page).toHaveURL(expectedPath);

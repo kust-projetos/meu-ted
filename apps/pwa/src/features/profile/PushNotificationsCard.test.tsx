@@ -33,4 +33,15 @@ describe("PushNotificationsCard", () => {
     fireEvent.click(activate);
     expect(await screen.findByText(/Notificações ativas/i)).toBeInTheDocument();
   });
+
+  it("hides the top panel completely once active when hideWhenActive is true", async () => {
+    mocked.getPushState.mockResolvedValue("ready");
+    mocked.enablePush.mockResolvedValue({ id: "sub-2", endpoint: "https://push.example.test/b", active: true, updatedAt: "now" });
+    render(<PushNotificationsCard workspaceId="workspace-a" hideWhenActive />);
+
+    const activate = await screen.findByRole("button", { name: /Ativar notificações/i });
+    fireEvent.click(activate);
+    await screen.findByText(/Notificações ativas/i).catch(() => null);
+    expect(screen.queryByLabelText("Notificações no dispositivo")).not.toBeInTheDocument();
+  });
 });

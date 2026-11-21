@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { disablePush, enablePush, getPushState, type PushState } from "@/lib/api/push-client";
 
-export default function PushNotificationsCard({ workspaceId }: { workspaceId?: string }) {
+export default function PushNotificationsCard({
+  workspaceId,
+  hideWhenActive = false,
+}: {
+  workspaceId?: string;
+  hideWhenActive?: boolean;
+}) {
   const [state, setState] = useState<PushState | "loading">(
     workspaceId ? "loading" : "unsupported",
   );
@@ -49,8 +55,30 @@ export default function PushNotificationsCard({ workspaceId }: { workspaceId?: s
     }
   }
 
+  if (state === "active") {
+    if (hideWhenActive) return null;
+    return (
+      <section
+        className="mb-3 flex items-center justify-between gap-3 rounded-[14px] border border-border-subtle bg-surface-2/60 px-3.5 py-2.5"
+        aria-label="Notificações no dispositivo"
+      >
+        <p role="status" className="text-[12px] font-semibold text-primary">
+          Notificações ativas
+        </p>
+        <button
+          type="button"
+          onClick={() => void deactivate()}
+          disabled={busy}
+          className="text-[12px] font-semibold text-text-muted underline disabled:opacity-50"
+        >
+          {busy ? "Desativando…" : "Desativar"}
+        </button>
+      </section>
+    );
+  }
+
   return (
-    <section className="rounded-[16px] border border-border bg-fill-light p-4" aria-labelledby="push-title">
+    <section className="mb-3 rounded-[16px] border border-border bg-fill-light p-4" aria-labelledby="push-title">
       <div className="mb-1 text-[15px] font-bold text-text-primary" id="push-title">Notificações no dispositivo</div>
       <p className="mb-3 text-[13px] leading-relaxed text-text-secondary">
         Receba lembretes importantes mesmo quando o Meu Ted estiver fechado.
@@ -72,14 +100,6 @@ export default function PushNotificationsCard({ workspaceId }: { workspaceId?: s
         <button type="button" onClick={() => void activate()} disabled={busy} className="rounded-full bg-primary px-4 py-2 text-[13px] font-bold text-white disabled:opacity-50">
           {busy ? "Ativando…" : "Ativar notificações"}
         </button>
-      )}
-      {state === "active" && (
-        <div className="flex items-center justify-between gap-3">
-          <p role="status" className="text-[13px] font-semibold text-primary">Notificações ativas</p>
-          <button type="button" onClick={() => void deactivate()} disabled={busy} className="text-[12px] font-semibold text-text-muted underline disabled:opacity-50">
-            {busy ? "Desativando…" : "Desativar"}
-          </button>
-        </div>
       )}
       {state === "denied" && <p role="alert" className="text-[13px] text-text-secondary">Notificações bloqueadas. Reative-as nos ajustes do navegador.</p>}
       {error && <p role="alert" className="mt-3 text-[13px] text-danger">{error}</p>}

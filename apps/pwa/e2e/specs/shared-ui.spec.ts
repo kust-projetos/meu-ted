@@ -294,7 +294,9 @@ test("[UI-07] write-error retry button → retry journal", async ({ page }) => {
   // BottomNav label is "Extrato" (navigates to /registros).
   // Desktop hides the BottomNav: the SidebarRail exposes the same
   // destination as a link.
-  const extratoMobile = page.getByRole("button", { name: "Extrato" });
+  const extratoMobile = page
+    .locator('nav[data-nav="bottom"]')
+    .getByRole("button", { name: "Extrato", exact: true });
   if (await extratoMobile.isVisible().catch(() => false)) {
     await extratoMobile.click();
   } else {
@@ -367,7 +369,9 @@ test("[UI-08] write-error dismiss button → no retry", async ({ page }) => {
 
   // BottomNav label is "Extrato" (navigates to /registros); desktop uses
   // the SidebarRail link with the same name.
-  const extratoMobileDismiss = page.getByRole("button", { name: "Extrato" });
+  const extratoMobileDismiss = page
+    .locator('nav[data-nav="bottom"]')
+    .getByRole("button", { name: "Extrato", exact: true });
   if (await extratoMobileDismiss.isVisible().catch(() => false)) {
     await extratoMobileDismiss.click();
   } else {

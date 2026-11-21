@@ -68,17 +68,6 @@ const mockOk = () => {
         ],
       } as never;
     }
-    if (path.startsWith("/analytics/daily-heatmap")) {
-      return {
-        endDate: "2026-09-07",
-        weeks: [
-          {
-            weekStart: "2026-09-01",
-            days: [{ date: "2026-09-01", totalCents: 500, level: 1 }],
-          },
-        ],
-      } as never;
-    }
     if (path.startsWith("/analytics/net-worth-history")) {
       return { months: [{ month: "2026-08", netWorthCents: 480000 }] } as never;
     }
@@ -92,7 +81,7 @@ describe("ReportsAnalyticsZone", () => {
     window.localStorage.clear();
   });
 
-  it("renderiza KPIs estratégicos, donut 5+Outras, bullets, fluxo e heatmap", async () => {
+  it("renderiza KPIs estratégicos, donut 5+Outras, bullets, fluxo e comparativo do período", async () => {
     mockOk();
     render(<ReportsAnalyticsZone accounts={ACCOUNTS} />);
 
@@ -115,7 +104,19 @@ describe("ReportsAnalyticsZone", () => {
     const budgets = screen.getByTestId("analytics-block-reports-budgets");
     expect(within(budgets).getByText("112%")).toBeInTheDocument();
     expect(screen.getByText("Fluxo de caixa")).toBeInTheDocument();
-    expect(screen.getByText("Atividade no mês")).toBeInTheDocument();
+
+    const comparison = screen.getByTestId("analytics-block-reports-comparison");
+    expect(within(comparison).getByText("Comparativo do período")).toBeInTheDocument();
+    expect(within(comparison).getByText("Receitas")).toBeInTheDocument();
+    expect(within(comparison).getByText("Despesas")).toBeInTheDocument();
+    expect(within(comparison).getByText("Saldo líquido")).toBeInTheDocument();
+    expect(within(comparison).getByText("−6.3%")).toBeInTheDocument();
+    expect(within(comparison).getByText(/Sobrou R\$\s*200,00 a mais/)).toBeInTheDocument();
+
+    expect(screen.queryByText("Atividade no mês")).not.toBeInTheDocument();
+    expect(
+      vi.mocked(client.apiFetch).mock.calls.some(([p]) => String(p).startsWith("/analytics/daily-heatmap")),
+    ).toBe(false);
   });
 
   it("toque na fatia mostra o valor no centro", async () => {

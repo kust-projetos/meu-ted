@@ -9,8 +9,7 @@ describe("Splash startup screen (item premium 3)", () => {
     expect(main.style.backgroundColor).toBe("rgb(11, 15, 14)");
     expect(screen.getByText("Meu Ted")).toBeInTheDocument();
     expect(screen.getByText("Tudo em dia.")).toBeInTheDocument();
-    const svg = container.querySelector("svg.splash-mascot");
-    expect(svg).toBeInTheDocument();
-    expect(svg?.querySelector(".splash-check")).toBeInTheDocument();
+    const img = container.querySelector('img.splash-mascot[src="/brand/ted-launcher.png"]');
+    expect(img).toBeInTheDocument();
   });
 });

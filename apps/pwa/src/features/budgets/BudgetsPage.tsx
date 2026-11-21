@@ -8,6 +8,7 @@ import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { useAppState } from "@/lib/state/app-state-context";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
+import { CategoryBadge } from "@/components/ui/CategoryBadge";
 import { Plus, ChevronRight, ChevronLeft } from "lucide-react";
 
 function formatBRL(cents: number): string {
@@ -278,7 +279,7 @@ function BudgetDetailSheet({
   );
 }
 
-export default function BudgetsPage() {
+export default function BudgetsPage({ embedded = false }: { embedded?: boolean }) {
   const { budgets, categories, transactions, loading, error, writeError, clearWriteError, retryWriteError, createBudget, updateBudget } = useAppState();
   const [tab, setTab] = useState<"expense" | "income">("expense");
   const [createOpen, setCreateOpen] = useState(false);
@@ -354,35 +355,6 @@ export default function BudgetsPage() {
     0,
   );
 
-  function getCategoryIcon(categoryId: string) {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat?.icon ?? "";
-  }
-
-  function getCategoryColor(categoryId: string): string {
-    const map: Record<string, string> = {
-      UtensilsCrossed: "#0E8C5A",
-      Car: "#B8791F",
-      Home: "#3E6FB0",
-      Heart: "#C8483B",
-      DollarSign: "#0E8C5A",
-      Laptop: "#3E6FB0",
-    };
-    return map[getCategoryIcon(categoryId)] ?? "#98A29A";
-  }
-
-  function getCategoryTint(categoryId: string): string {
-    const map: Record<string, string> = {
-      UtensilsCrossed: "#E7F3EC",
-      Car: "#FBF1E3",
-      Home: "#E8EFF7",
-      Heart: "#F7E9E7",
-      DollarSign: "#E7F3EC",
-      Laptop: "#E8EFF7",
-    };
-    return map[getCategoryIcon(categoryId)] ?? "var(--surface-2)";
-  }
-
   const barColor = (pct: number) => {
     if (pct >= 100) return "var(--color-danger)";
     if (pct >= 80) return "var(--color-warning)";
@@ -391,8 +363,8 @@ export default function BudgetsPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
@@ -404,22 +376,24 @@ export default function BudgetsPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-        <PageHeader
-          title="Orçamentos"
-          action={
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
-            >
-              <Plus size={15} strokeWidth={2.4} />
-              Novo
-            </button>
-          }
-        />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && (
+          <PageHeader
+            title="Orçamentos"
+            action={
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Novo
+              </button>
+            }
+          />
+        )}
 
         {error && (
           <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
@@ -433,27 +407,39 @@ export default function BudgetsPage() {
 
         <div className="px-5 sm:px-8 lg:px-12">
           {/* Tabs */}
-          <div className="mb-[10px] flex gap-1.5 rounded-[14px] bg-surface-2 p-1 border border-border-subtle">
-            <button
-              onClick={() => setTab("expense")}
-              className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${
-                tab === "expense"
-                  ? "bg-surface-1 text-text-primary shadow-sm"
-                  : "text-text-muted hover:text-text-secondary"
-              }`}
-            >
-              Despesas
-            </button>
-            <button
-              onClick={() => setTab("income")}
-              className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${
-                tab === "income"
-                  ? "bg-surface-1 text-text-primary shadow-sm"
-                  : "text-text-muted hover:text-text-secondary"
-              }`}
-            >
-              Receitas (previsão)
-            </button>
+          <div className="mb-[10px] flex items-center gap-2">
+            <div className="flex flex-1 gap-1.5 rounded-[14px] bg-surface-2 p-1 border border-border-subtle">
+              <button
+                onClick={() => setTab("expense")}
+                className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${
+                  tab === "expense"
+                    ? "bg-surface-1 text-text-primary shadow-sm"
+                    : "text-text-muted hover:text-text-secondary"
+                }`}
+              >
+                Despesas
+              </button>
+              <button
+                onClick={() => setTab("income")}
+                className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${
+                  tab === "income"
+                    ? "bg-surface-1 text-text-primary shadow-sm"
+                    : "text-text-muted hover:text-text-secondary"
+                }`}
+              >
+                Receitas (previsão)
+              </button>
+            </div>
+            {embedded && (
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex flex-none items-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Novo
+              </button>
+            )}
           </div>
 
           {/* Summary */}
@@ -493,7 +479,7 @@ export default function BudgetsPage() {
                   ? Math.min((realSpent / b.amountCents) * 100, 100)
                   : 0;
               const color = barColor(pct);
-              const icon = getCategoryIcon(b.categoryId);
+              const cat = categories.find((c) => c.id === b.categoryId);
 
               return (
                 <button
@@ -505,43 +491,8 @@ export default function BudgetsPage() {
                   {/* Header */}
                   <div className="mb-[9px] flex items-center justify-between">
                     <div className="flex items-center gap-[9px]">
-                      <div
-                        className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] shadow-xs"
-                        style={{ background: getCategoryTint(b.categoryId) }}
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke={getCategoryColor(b.categoryId)}
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          {icon === "UtensilsCrossed" && (
-                            <>
-                              <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
-                              <path d="M7 2v20" />
-                              <path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
-                            </>
-                          )}
-                          {icon === "Car" && (
-                            <path d="M14 16H9m10 0h3v-3.15a1 1 0 0 0-.84-.99L16 11l-2.7-3.6a1 1 0 0 0-.8-.4H5.5a1 1 0 0 0-.8.4L2 11v5h3m10 0a3 3 0 1 1-6 0m6 0a3 3 0 1 0-6 0" />
-                          )}
-                          {icon === "Home" && (
-                            <path d="M3 12L12 3l9 9M5 10v9a1 1 0 0 0 1 1h4v-5h4v5h4a1 1 0 0 0 1-1v-9" />
-                          )}
-                          {icon === "Heart" && (
-                            <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-                          )}
-                          {icon === "DollarSign" && (
-                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-                          )}
-                          {icon === "Laptop" && (
-                            <path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1 3H3l1-3" />
-                          )}
-                        </svg>
+                      <div className="flex h-[32px] w-[32px] items-center justify-center rounded-[10px] bg-surface-2 shadow-xs">
+                        <CategoryBadge name={cat?.name ?? b.name} size={24} icon={cat?.icon} />
                       </div>
                       <span className="text-[14px] font-bold text-text-primary">
                         {b.name}

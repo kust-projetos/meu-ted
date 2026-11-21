@@ -19,8 +19,11 @@ import userEvent from "@testing-library/user-event";
 import { WorkspaceProvider, useWorkspace } from "../workspace-context";
 import {
   ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY,
+  PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY,
   readActiveWorkspacePreference,
+  readPrimaryWorkspacePreference,
   writeActiveWorkspacePreference,
+  writePrimaryWorkspacePreference,
 } from "../active-workspace-preference";
 import {
   getOfflinePrincipalId,
@@ -70,15 +73,21 @@ vi.mock("@/lib/api/client", () => ({
 }));
 
 function Probe() {
-  const { activeWorkspace, workspaces, selectWorkspace } = useWorkspace();
+  const { activeWorkspace, primaryWorkspaceId, workspaces, selectWorkspace, setPrimaryWorkspace } = useWorkspace();
   return (
     <>
       <div data-testid="active-id">{activeWorkspace?.id ?? "none"}</div>
       <div data-testid="active-name">{activeWorkspace?.name ?? "none"}</div>
+      <div data-testid="primary-id">{primaryWorkspaceId ?? "none"}</div>
       {workspaces.map((workspace) => (
-        <button key={workspace.id} onClick={() => void selectWorkspace(workspace.id)}>
-          {workspace.name}
-        </button>
+        <div key={workspace.id}>
+          <button onClick={() => void selectWorkspace(workspace.id)}>
+            {workspace.name}
+          </button>
+          <button onClick={() => setPrimaryWorkspace?.(workspace.id)}>
+            {`Definir principal ${workspace.name}`}
+          </button>
+        </div>
       ))}
     </>
   );
@@ -208,6 +217,7 @@ describe("active workspace preference across reload", () => {
 
   it("wipes the preference on full identity teardown (logout/revocation)", async () => {
     expect(writeActiveWorkspacePreference("user-1", WS_FAMILY)).toBe(true);
+    expect(writePrimaryWorkspacePreference("user-1", WS_PERSONAL)).toBe(true);
 
     await clearSensitiveSession({
       clearToken: true,
@@ -217,6 +227,38 @@ describe("active workspace preference across reload", () => {
     });
 
     expect(localStorage.getItem(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY)).toBeNull();
     expect(getOfflinePrincipalId()).toBeNull();
+  });
+
+  it("boots into the user-configured primary workspace over the last active preference and clears when archived", async () => {
+    const user = userEvent.setup();
+    expect(writeActiveWorkspacePreference("user-1", WS_PERSONAL)).toBe(true);
+    expect(writePrimaryWorkspacePreference("user-1", WS_FAMILY)).toBe(true);
+
+    const view = render(
+      <WorkspaceProvider>
+        <Probe />
+      </WorkspaceProvider>,
+    );
+
+    expect(await screen.findByTestId("active-name")).toHaveTextContent("Test Family");
+    expect(screen.getByTestId("primary-id")).toHaveTextContent(WS_FAMILY);
+
+    await user.click(screen.getByRole("button", { name: "Definir principal junio" }));
+    expect(screen.getByTestId("primary-id")).toHaveTextContent(WS_PERSONAL);
+    expect(readPrimaryWorkspacePreference("user-1")).toBe(WS_PERSONAL);
+
+    // Clear and simulate archived primary fallback
+    expect(writePrimaryWorkspacePreference("user-1", WS_FAMILY)).toBe(true);
+    mockWorkspaceList("archived");
+    view.unmount();
+    render(
+      <WorkspaceProvider>
+        <Probe />
+      </WorkspaceProvider>,
+    );
+    expect(await screen.findByTestId("active-name")).toHaveTextContent("junio");
+    expect(readPrimaryWorkspacePreference("user-1")).toBeNull();
   });
 });

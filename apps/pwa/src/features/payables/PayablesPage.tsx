@@ -7,7 +7,6 @@ import BottomSheet from "@/components/BottomSheet";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
-import { TedMark } from "@/components/brand/TedMark";
 import { useAppState } from "@/lib/state/app-state-context";
 import { usePullToRefresh, PullToRefreshIndicator } from "@/lib/ui/use-pull-to-refresh";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
@@ -119,7 +118,7 @@ function NewPayableSheet({
             {expenseCategories.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
           </select>
         </fieldset>
-        <button type="button" onClick={handleSave} className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98]">Salvar conta</button>
+        <button type="button" onClick={handleSave} disabled={!description.trim() || !dueDate || parseBRLToCents(amountStr) <= 0} className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98] disabled:opacity-50">Salvar conta</button>
       </div>
     </BottomSheet>
   );
@@ -334,7 +333,7 @@ function DetailSheet({
   );
 }
 
-export default function PayablesPage() {
+export default function PayablesPage({ embedded = false }: { embedded?: boolean }) {
   const { payables, categories, accounts, markPayablePaid, cancelPayable, updatePayable, undoPayablePayment, createPayable, loading, error, writeError, clearWriteError, retryWriteError, refreshDomains } = useAppState();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [createOpen, setCreateOpen] = useState(false);
@@ -405,8 +404,8 @@ export default function PayablesPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
@@ -418,16 +417,18 @@ export default function PayablesPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
         <PullToRefreshIndicator state={pull} />
-        <PageHeader title="Contas a pagar" action={
-          <button type="button" onClick={() => setCreateOpen(true)} className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
-            <Plus size={15} strokeWidth={2.4} />
-            Nova
-          </button>
-        } />
+        {!embedded && (
+          <PageHeader title="Contas a pagar" action={
+            <button type="button" onClick={() => setCreateOpen(true)} className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
+              <Plus size={15} strokeWidth={2.4} />
+              Nova
+            </button>
+          } />
+        )}
 
         {error && (<div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">⚠ {error}</div>)}
         <WriteErrorBanner message={writeError} onDismiss={clearWriteError} onRetry={retryWriteError ?? undefined} />
@@ -442,12 +443,20 @@ export default function PayablesPage() {
             </div>
           </div>
 
-          <div data-no-swipe className="mb-4 flex gap-2 overflow-x-auto scrollbar-hide">
-            {filterChips.map((chip) => (
-              <button key={chip.key} onClick={() => setStatusFilter(chip.key === statusFilter ? "all" : chip.key)}
-                className={`flex-none rounded-full px-4 py-2 text-[12px] font-bold transition-all ${statusFilter === chip.key ? "bg-primary text-white shadow-xs" : "bg-surface-1 border border-border-subtle text-text-secondary hover:bg-surface-2"}`}
-              >{chip.label}</button>
-            ))}
+          <div className="mb-4 flex items-center gap-2">
+            <div data-no-swipe className="flex flex-1 gap-2 overflow-x-auto scrollbar-hide">
+              {filterChips.map((chip) => (
+                <button key={chip.key} onClick={() => setStatusFilter(chip.key === statusFilter ? "all" : chip.key)}
+                  className={`flex-none rounded-full px-4 py-2 text-[12px] font-bold transition-all ${statusFilter === chip.key ? "bg-primary text-white shadow-xs" : "bg-surface-1 border border-border-subtle text-text-secondary hover:bg-surface-2"}`}
+                >{chip.label}</button>
+              ))}
+            </div>
+            {embedded && (
+              <button type="button" onClick={() => setCreateOpen(true)} className="flex flex-none items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            )}
           </div>
         </div>
 
@@ -468,10 +477,11 @@ export default function PayablesPage() {
                   const iconColor = isPaid ? "var(--color-primary)" : isOverdue ? "var(--color-danger)" : "var(--color-text-secondary)";
 
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={p.id}
                       onClick={() => openDetail(p)}
-                      className={`flex cursor-pointer items-center gap-3 rounded-[16px] bg-surface-1 px-4 py-3.5 shadow-card hover:bg-surface-2/60 active:scale-[0.99] transition-all border ${isOverdue ? "border-danger/30" : "border-border-subtle"}`}
+                      className={`flex w-full cursor-pointer items-center gap-3 rounded-[16px] bg-surface-1 px-4 py-3.5 text-left shadow-card hover:bg-surface-2/60 active:scale-[0.99] transition-all border ${isOverdue ? "border-danger/30" : "border-border-subtle"}`}
                       style={{ opacity }}
                     >
                       <div className="flex h-[42px] w-[42px] flex-none flex-col items-center justify-center rounded-[12px] font-mono font-bold leading-none shadow-xs" style={{ background: iconBg, color: iconColor }}>
@@ -485,7 +495,7 @@ export default function PayablesPage() {
                         </div>
                       </div>
                       <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">{formatBRL(p.amountCents)}</div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -493,7 +503,8 @@ export default function PayablesPage() {
           ))}
           {groups.length === 0 && (
             <div className="flex flex-col items-center py-[50px] text-center">
-              <TedMark size={56} variant="relaxed" label="Ted relaxado" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/brand/ted-launcher.png" alt="" aria-label="Ted relaxado" width={56} height={56} className="h-14 w-14 rounded-2xl object-contain" />
               <div className="mt-3 text-[14px] font-bold text-text-primary">Nenhuma conta pendente. Tudo em dia!</div>
               <div className="mt-1 text-[12px] text-text-muted">Nenhuma conta com este status.</div>
             </div>

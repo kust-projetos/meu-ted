@@ -6,8 +6,11 @@ import { clearSensitiveSession } from "@/lib/session";
 import { closeAllSockets } from "./socket-registry";
 import {
   clearActiveWorkspacePreference,
+  clearPrimaryWorkspacePreference,
   readActiveWorkspacePreference,
+  readPrimaryWorkspacePreference,
   writeActiveWorkspacePreference,
+  writePrimaryWorkspacePreference,
 } from "./active-workspace-preference";
 import { getOfflinePrincipalId, getOfflineWorkspaceId, clearOfflineWorkspaceBinding } from "./offline-identity";
 import { getSessionStatus } from "./session-authority";
@@ -138,6 +141,8 @@ export interface WorkspaceContextValue {
   isOfflineReadOnly: boolean;
   offlineWorkspaceId: string | null;
   offlineBlockedReason: OfflineWorkspaceBlockReason | null;
+  primaryWorkspaceId?: string | null;
+  setPrimaryWorkspace?: (workspaceId: string | null) => void;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
   refreshMembers: () => Promise<void>;
@@ -191,9 +196,31 @@ function resolveActiveWorkspaceId(
     typeof id === "string" &&
     list.some((workspace) => workspace.id === id && workspace.status !== "archived" && workspace.status !== "deleted");
   if (eligible(current)) return current;
+  const primary = principalId ? readPrimaryWorkspacePreference(principalId) : null;
+  if (eligible(primary)) return primary;
   const stored = principalId ? readActiveWorkspacePreference(principalId) : null;
   if (eligible(stored)) return stored;
   return list.find((workspace) => workspace.status !== "archived" && workspace.status !== "deleted")?.id;
+}
+
+function resolveValidPrimaryWorkspaceId(
+  list: Workspace[],
+  principalId: string | null,
+): string | null {
+  if (!principalId) return null;
+  const storedPrimary = readPrimaryWorkspacePreference(principalId);
+  if (!storedPrimary) return null;
+  const isValid = list.some(
+    (workspace) =>
+      workspace.id === storedPrimary &&
+      workspace.status !== "archived" &&
+      workspace.status !== "deleted",
+  );
+  if (!isValid) {
+    clearPrimaryWorkspacePreference();
+    return null;
+  }
+  return storedPrimary;
 }
 
 /**
@@ -295,6 +322,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [ownershipTransfers, setOwnershipTransfers] = useState<OwnershipTransfer[]>([]);
+  const [primaryWorkspaceId, setPrimaryWorkspaceIdState] = useState<string | null>(null);
   const [loading, setLoading] = useState(() => isApiConfigured());
   const [membersLoading, setMembersLoading] = useState(false);
   const [pendingInvitesLoading, setPendingInvitesLoading] = useState(false);
@@ -350,8 +378,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // network failures keep the last validated selection below.
         activeWorkspaceIdRef.current = undefined;
         setActiveWorkspaceIdState(undefined);
+        setPrimaryWorkspaceIdState(null);
         clearActiveWorkspaceId();
         persistActiveWorkspacePreference(undefined);
+        clearPrimaryWorkspacePreference();
         try {
           clearOfflineWorkspaceBinding();
         } catch {
@@ -439,8 +469,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setOfflineWorkspaceId(null);
       setOfflineBlockedReason(null);
       needsRevalidationRef.current = false;
+      const principal = getOfflinePrincipalId();
       const current = activeWorkspaceIdRef.current;
-      const selected = resolveActiveWorkspaceId(next, current, getOfflinePrincipalId());
+      const selected = resolveActiveWorkspaceId(next, current, principal);
+      const validPrimary = resolveValidPrimaryWorkspaceId(next, principal);
       if (current && selected !== current) {
         setLoading(true);
         closeAllSockets("workspace access revoked");
@@ -456,6 +488,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       // All workspace-data writes happen only after the final validation, so
       // a stale list can never flash (or persist) under a new principal.
       setWorkspaces(next);
+      setPrimaryWorkspaceIdState(validPrimary);
       activeWorkspaceIdRef.current = selected;
       setActiveWorkspaceIdState(selected);
       if (selected) setActiveWorkspaceId(selected);
@@ -500,8 +533,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setOfflineWorkspaceId(null);
         setOfflineBlockedReason(null);
         needsRevalidationRef.current = false;
+        const principal = getOfflinePrincipalId();
         const current = activeWorkspaceIdRef.current;
-        const selected = resolveActiveWorkspaceId(next, current, getOfflinePrincipalId());
+        const selected = resolveActiveWorkspaceId(next, current, principal);
+        const validPrimary = resolveValidPrimaryWorkspaceId(next, principal);
         if (current && selected !== current) {
           setLoading(true);
           closeAllSockets("workspace access revoked");
@@ -512,6 +547,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           if (isStale()) return;
         }
         setWorkspaces(next);
+        setPrimaryWorkspaceIdState(validPrimary);
         activeWorkspaceIdRef.current = selected;
         setActiveWorkspaceIdState(selected);
         if (selected) setActiveWorkspaceId(selected);
@@ -760,8 +796,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // with the auth error below, never on the unvalidated destination.
         activeWorkspaceIdRef.current = undefined;
         setActiveWorkspaceIdState(undefined);
+        setPrimaryWorkspaceIdState(null);
         clearActiveWorkspaceId();
         persistActiveWorkspacePreference(undefined);
+        clearPrimaryWorkspacePreference();
         // SAME-ACTIVE FIX (HIGH): a same-current selection skips the
         // pre-revalidation purge, so without this the offline workspace
         // binding + subject partition + age stamp would survive an explicit
@@ -917,6 +955,26 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     await refreshWorkspaces();
   }, [activeWorkspace, refreshWorkspaces]);
 
+  const setPrimaryWorkspace = useCallback((workspaceId: string | null) => {
+    if (workspaceId === null) {
+      clearPrimaryWorkspacePreference();
+      setPrimaryWorkspaceIdState(null);
+      return;
+    }
+    const exists = workspacesRef.current.some(
+      (workspace) =>
+        workspace.id === workspaceId &&
+        workspace.status !== "archived" &&
+        workspace.status !== "deleted",
+    );
+    if (!exists) return;
+    const principalId = getOfflinePrincipalId();
+    if (principalId) {
+      writePrimaryWorkspacePreference(principalId, workspaceId);
+    }
+    setPrimaryWorkspaceIdState(workspaceId);
+  }, []);
+
   const value = useMemo<WorkspaceContextValue>(() => ({
     workspaces,
     activeWorkspace,
@@ -932,6 +990,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     isOfflineReadOnly,
     offlineWorkspaceId,
     offlineBlockedReason,
+    primaryWorkspaceId,
+    setPrimaryWorkspace,
     selectWorkspace,
     refreshWorkspaces,
     refreshMembers,
@@ -952,7 +1012,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     transferOwnership,
     acceptTransfer,
     leave,
-  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, isOfflineReadOnly, offlineWorkspaceId, offlineBlockedReason, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
+  }), [workspaces, activeWorkspace, members, pendingInvites, ownershipTransfers, loading, membersLoading, pendingInvitesLoading, ownershipTransfersLoading, error, isAuthError, isOfflineReadOnly, offlineWorkspaceId, offlineBlockedReason, primaryWorkspaceId, setPrimaryWorkspace, selectWorkspace, refreshWorkspaces, refreshMembers, refreshPendingInvites, refreshOwnershipTransfers, createWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, fetchDeletionInventory, requestAgentEmptyAttestation, deleteWorkspace, inviteMember, resendInvite, revokeInvite, acceptInvite, removeMember, transferOwnership, acceptTransfer, leave]);
 
   if (loading) return <main className="flex h-dvh items-center justify-center text-text-secondary">Carregando workspaces…</main>;
   return (

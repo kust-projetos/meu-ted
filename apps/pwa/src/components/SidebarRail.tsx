@@ -16,6 +16,9 @@ import {
   CreditCard,
   Wallet,
   CalendarCheck,
+  Calculator,
+  Flag,
+  Landmark,
   FileText,
   Bell,
   FolderOpen,
@@ -46,9 +49,9 @@ const PRIMARY_NAV: NavItemDef[] = [
 
 const SECONDARY_NAV: NavItemDef[] = [
   { label: "Compromissos", href: "/compromissos", icon: CalendarCheck },
-  { label: "Contas", href: "/hub/patrimonio?aba=contas", icon: Wallet },
-  { label: "Planejamento", href: "/hub/planejamento", icon: CalendarCheck },
-  { label: "Metas", href: "/hub/planejamento?aba=metas", icon: CalendarCheck },
+  { label: "Contas", href: "/hub/patrimonio?aba=contas", icon: Landmark },
+  { label: "Planejamento", href: "/hub/planejamento", icon: Calculator },
+  { label: "Metas", href: "/hub/planejamento?aba=metas", icon: Flag },
   { label: "Patrimônio", href: "/hub/patrimonio?aba=patrimonio", icon: Wallet },
   { label: "Categorias", href: "/hub/categorias", icon: FolderOpen },
   { label: "Avisos e Lembretes", href: "/hub/alertas", icon: Bell },
@@ -73,11 +76,11 @@ export function SidebarRail({
       {/* Header: Logo & Branding */}
       <div className="flex items-center gap-3 px-2 mb-6">
         <Image
-          src="/logo.svg"
+          src="/brand/ted-launcher.png"
           alt="Meu Ted"
           width={36}
           height={36}
-          className="h-9 w-9 flex-none"
+          className="h-9 w-9 flex-none rounded-[10px]"
         />
         <div className="flex flex-col">
           <span className="text-[15px] font-bold tracking-tight text-text-primary">
@@ -91,7 +94,7 @@ export function SidebarRail({
 
       {/* Workspace Switcher */}
       <div className="mb-5 px-1">
-        <WorkspaceSwitcher compact />
+        <WorkspaceSwitcher compact align="left" />
       </div>
 
       {/* New Transaction CTA Button */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type FormEvent } from "react";
-import { Archive, Check, FolderKanban, Pencil, Plus, RotateCcw, Trash2, Users, X, History, Send } from "lucide-react";
+import { Archive, ArrowLeftRight, Check, FolderKanban, History, LogOut, Pencil, Plus, RotateCcw, Send, Star, Trash2, UserMinus, Users, X } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
 import StatusBar from "@/components/StatusBar";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +9,7 @@ import Card from "@/components/ui/Card";
 import Dialog from "@/components/ui/Dialog";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/lib/auth/workspace-context";
-import type { Workspace, DeletionInventory } from "@/lib/api/workspaces";
+import type { Workspace, DeletionInventory, WorkspaceMember } from "@/lib/api/workspaces";
 import { createWorkspaceInvite } from "@/lib/api/workspaces";
 import { ApiError } from "@/lib/api/client";
 import { fetchAuditLogs, type AuditLog } from "@/lib/api/endpoints";
@@ -37,6 +37,8 @@ export default function WorkspaceManagerPage() {
   const {
     workspaces,
     activeWorkspace,
+    primaryWorkspaceId,
+    setPrimaryWorkspace,
     members,
     pendingInvites,
     ownershipTransfers,
@@ -54,8 +56,10 @@ export default function WorkspaceManagerPage() {
     inviteMember,
     resendInvite,
     revokeInvite,
+    removeMember,
     transferOwnership,
     acceptTransfer,
+    leave,
   } = useWorkspace();
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<WorkspaceKind>("shared");
@@ -79,10 +83,15 @@ export default function WorkspaceManagerPage() {
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | null>(null);
   const [formBusy, setFormBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   const [revokeTarget, setRevokeTarget] = useState<import("@/lib/api/workspaces").PendingInvite | null>(null);
   const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   const [revokeBusy, setRevokeBusy] = useState(false);
+  const [removeMemberTarget, setRemoveMemberTarget] = useState<WorkspaceMember | null>(null);
+  const [removeMemberBusy, setRemoveMemberBusy] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+  const [leaveBusy, setLeaveBusy] = useState(false);
   const [transferTargetUserId, setTransferTargetUserId] = useState("");
   const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
   const [acceptTransferTarget, setAcceptTransferTarget] = useState<import("@/lib/api/workspaces").OwnershipTransfer | null>(null);
@@ -102,6 +111,7 @@ export default function WorkspaceManagerPage() {
 
   const active = workspaces.filter((workspace) => workspace.status !== "archived");
   const archived = workspaces.filter((workspace) => workspace.status === "archived");
+  const sharedActiveWorkspaces = active.filter((workspace) => workspace.kind === "shared");
   const activeMembers = activeWorkspace?.kind === "shared" ? members.length : 0;
   // D1 (ADR-027): N personal workspaces per user — the kind selector never
   // blocks "Pessoal" and the server no longer 409s on cardinality. Personal
@@ -152,6 +162,7 @@ export default function WorkspaceManagerPage() {
     }
     setCardInviteBusy((prev) => ({ ...prev, [workspaceId]: true }));
     setActionError(null);
+    setActionSuccess(null);
     try {
       if (activeWorkspace?.id === workspaceId) {
         await inviteMember(email);
@@ -159,6 +170,7 @@ export default function WorkspaceManagerPage() {
         await createWorkspaceInvite(workspaceId, email);
       }
       setCardInviteEmails((prev) => ({ ...prev, [workspaceId]: "" }));
+      setActionSuccess(`Convite enviado para ${email}.`);
     } catch (cause) {
       const message =
         cause instanceof ApiError && cause.code === "auth.invite_forbidden"
@@ -175,11 +187,57 @@ export default function WorkspaceManagerPage() {
   const activePendingTransfer = ownershipTransfers?.find((t) => t.status === "pending");
   const pendingTransferForMember = activeWorkspace?.role === "member" ? activePendingTransfer : null;
 
+  function handleTogglePrimary(workspace: Workspace) {
+    if (!setPrimaryWorkspace) return;
+    const isAlreadyPrimary = primaryWorkspaceId === workspace.id;
+    setActionError(null);
+    if (isAlreadyPrimary) {
+      setPrimaryWorkspace(null);
+      setActionSuccess(`${workspace.name} não é mais o workspace principal.`);
+    } else {
+      setPrimaryWorkspace(workspace.id);
+      setActionSuccess(`${workspace.name} definido como workspace principal.`);
+    }
+  }
+
+  async function handleRemoveMember() {
+    if (!removeMemberTarget) return;
+    setRemoveMemberBusy(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      await removeMember(removeMemberTarget.userId);
+      setActionSuccess(`${removeMemberTarget.name || removeMemberTarget.email} foi removido do espaço.`);
+      setRemoveMemberTarget(null);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Não foi possível remover o membro.");
+    } finally {
+      setRemoveMemberBusy(false);
+    }
+  }
+
+  async function handleLeaveWorkspace() {
+    setLeaveBusy(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      await leave();
+      setLeaveConfirmOpen(false);
+      setActionSuccess("Você saiu do workspace compartilhado.");
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Não foi possível sair do workspace.");
+    } finally {
+      setLeaveBusy(false);
+    }
+  }
+
   async function handleResendInvite(inviteId: string) {
     setResendingInviteId(inviteId);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await resendInvite(inviteId);
+      setActionSuccess("Convite reenviado.");
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível reenviar o convite.");
     } finally {
@@ -191,8 +249,10 @@ export default function WorkspaceManagerPage() {
     if (!revokeTarget) return;
     setRevokeBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await revokeInvite(revokeTarget.id);
+      setActionSuccess(`Convite para ${revokeTarget.email} revogado.`);
       setRevokeTarget(null);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível revogar o convite.");
@@ -205,10 +265,12 @@ export default function WorkspaceManagerPage() {
     if (!transferTargetUserId) return;
     setTransferBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await transferOwnership(transferTargetUserId);
       setTransferConfirmOpen(false);
       setTransferTargetUserId("");
+      setActionSuccess("Proposta de transferência enviada ao membro selecionado.");
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível transferir a titularidade.");
     } finally {
@@ -220,9 +282,11 @@ export default function WorkspaceManagerPage() {
     if (!acceptTransferTarget) return;
     setTransferBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await acceptTransfer(acceptTransferTarget.id);
       setAcceptTransferTarget(null);
+      setActionSuccess("Titularidade aceita com sucesso.");
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível aceitar a titularidade.");
     } finally {
@@ -240,9 +304,11 @@ export default function WorkspaceManagerPage() {
     }
     setInviteBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await inviteMember(email);
       setInviteEmail("");
+      setActionSuccess(`Convite enviado para ${email}.`);
     } catch (cause) {
       const message =
         cause instanceof ApiError && cause.code === "auth.invite_forbidden"
@@ -262,9 +328,11 @@ export default function WorkspaceManagerPage() {
     if (!name) return;
     setFormBusy(true);
     setActionError(null);
+    setActionSuccess(null);
     try {
       await createWorkspace({ name, kind: newKind });
       setNewName("");
+      setActionSuccess(`Workspace "${name}" criado.`);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível criar o workspace.");
     } finally {
@@ -277,9 +345,12 @@ export default function WorkspaceManagerPage() {
     if (!editingWorkspace || !editingName.trim()) return;
     setBusyWorkspaceId(editingWorkspace.id);
     setActionError(null);
+    setActionSuccess(null);
     try {
-      await renameWorkspace(editingWorkspace.id, editingName.trim());
+      const renamed = editingName.trim();
+      await renameWorkspace(editingWorkspace.id, renamed);
       setEditingWorkspace(null);
+      setActionSuccess(`Workspace renomeado para "${renamed}".`);
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : "Não foi possível renomear o workspace.");
     } finally {
@@ -416,6 +487,7 @@ export default function WorkspaceManagerPage() {
 
   function renderWorkspaceCard(workspace: Workspace) {
     const isActive = workspace.id === activeWorkspace?.id;
+    const isPrimary = workspace.id === primaryWorkspaceId;
     const isArchived = workspace.status === "archived";
     const canManage = workspace.role === "owner";
     const busy = busyWorkspaceId === workspace.id;
@@ -441,11 +513,16 @@ export default function WorkspaceManagerPage() {
             {initials(workspace.name)}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="truncate text-[15px] font-extrabold text-text-primary">{workspace.name}</h3>
               {isActive && (
                 <span className="inline-flex flex-none items-center gap-1 rounded-full bg-primary-tint px-2 py-0.5 text-[10px] font-bold text-primary">
                   <Check size={11} strokeWidth={2.8} /> Ativo
+                </span>
+              )}
+              {isPrimary && !isArchived && (
+                <span className="inline-flex flex-none items-center gap-1 rounded-full bg-warning-tint px-2 py-0.5 text-[10px] font-bold text-warning">
+                  <Star size={10} className="fill-current" aria-hidden="true" /> Principal
                 </span>
               )}
             </div>
@@ -455,11 +532,24 @@ export default function WorkspaceManagerPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-2 border-t border-border-subtle pt-3">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
           <span className={`text-[11px] font-bold ${isArchived ? "text-text-muted" : "text-primary"}`}>
             {isArchived ? "Arquivado" : workspace.kind === "shared" && isActive ? `${members.length} membro${members.length === 1 ? "" : "s"}` : "Pronto para usar"}
           </span>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {!isArchived && setPrimaryWorkspace && (
+              <Button
+                type="button"
+                variant={isPrimary ? "outline" : "ghost"}
+                size="sm"
+                aria-label={isPrimary ? `Remover ${workspace.name} como principal` : `Definir ${workspace.name} como principal`}
+                onClick={() => handleTogglePrimary(workspace)}
+                className={isPrimary ? "border-warning/40 text-warning hover:bg-warning-tint/60" : ""}
+              >
+                <Star size={13} className={isPrimary ? "fill-current" : ""} aria-hidden="true" />
+                {isPrimary ? "Principal" : "Tornar principal"}
+              </Button>
+            )}
             {!isArchived && !isActive && (
               <Button
                 type="button"
@@ -536,9 +626,16 @@ export default function WorkspaceManagerPage() {
         {workspace.kind === "shared" && !isArchived && (
           <div className="mt-4 space-y-3 rounded-[14px] border border-border-subtle bg-surface-2/40 p-3">
             <div>
-              <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-muted">
-                <Users size={12} /> Membros {isActive ? `· ${members.length}` : ""}
-              </p>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                  <Users size={12} /> Membros {isActive ? `· ${members.length}` : ""}
+                </p>
+                {isActive && pendingInvites.length > 0 && (
+                  <span className="rounded-full bg-warning-tint px-2 py-0.5 text-[10px] font-bold text-warning">
+                    {pendingInvites.length} convite{pendingInvites.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
               {isActive && members.length > 0 ? (
                 <ul className="space-y-1.5">
                   {members.map((m) => (
@@ -554,6 +651,18 @@ export default function WorkspaceManagerPage() {
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${m.role === "owner" ? "bg-primary-tint text-primary" : "bg-surface-2 text-text-muted"}`}>
                           {m.role === "owner" ? "Owner" : "Membro"}
                         </span>
+                        {canManage && m.role !== "owner" && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Remover ${m.name || m.email}`}
+                            onClick={() => setRemoveMemberTarget(m)}
+                            className="h-7 w-7 text-text-muted hover:text-danger"
+                          >
+                            <UserMinus size={13} />
+                          </Button>
+                        )}
                       </div>
                     </li>
                   ))}
@@ -561,7 +670,16 @@ export default function WorkspaceManagerPage() {
               ) : isActive && members.length === 0 ? (
                 <p className="text-[12px] text-text-muted">Nenhum membro encontrado.</p>
               ) : (
-                <p className="text-[11px] text-text-muted">Membros visíveis quando o workspace estiver ativo.</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] text-text-muted">Ative este espaço para gerenciar membros e titularidade.</p>
+                  <button
+                    type="button"
+                    onClick={() => void selectWorkspace(workspace.id)}
+                    className="text-[11px] font-bold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    Ativar agora
+                  </button>
+                </div>
               )}
             </div>
             <form onSubmit={(e) => void handleCardInvite(e, workspace.id)} className="space-y-2">
@@ -590,16 +708,30 @@ export default function WorkspaceManagerPage() {
                 </Button>
               </div>
             </form>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-label={`Ver logs de ${workspace.name}`}
-              onClick={() => setLogsWorkspace(workspace)}
-              className="w-full"
-            >
-              <History size={14} /> Logs
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={`Ver logs de ${workspace.name}`}
+                onClick={() => setLogsWorkspace(workspace)}
+                className="flex-1"
+              >
+                <History size={14} /> Logs
+              </Button>
+              {isActive && workspace.role === "member" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Sair de ${workspace.name}`}
+                  onClick={() => setLeaveConfirmOpen(true)}
+                  className="text-danger hover:bg-danger-tint"
+                >
+                  <LogOut size={14} /> Sair
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </article>
@@ -607,32 +739,28 @@ export default function WorkspaceManagerPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg pb-[var(--tab-bar-height)]">
+    <div className="flex min-h-dvh flex-col bg-bg pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
       <StatusBar />
       <PageHeader title="Meus Espaços" subtitle="Organize cada contexto sem misturar seus dados." />
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-5 px-5 py-4 sm:px-8 lg:px-12">
-        <section className="relative overflow-hidden rounded-[24px] bg-gradient-to-br from-[#0d6b47] via-[#0e8c5a] to-[#1c9b72] p-5 text-white shadow-elevated sm:p-7" aria-labelledby="workspace-overview-heading">
-          <div className="pointer-events-none absolute -right-12 -top-16 h-48 w-48 rounded-full border-[24px] border-white/10" />
-          <div className="pointer-events-none absolute -bottom-20 right-24 h-40 w-40 rounded-full bg-white/10 blur-2xl" />
-          <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-5 px-5 py-3 sm:px-8 lg:px-12">
+        <section className="relative overflow-hidden rounded-[22px] bg-gradient-to-br from-[#0d6b47] via-[#0e8c5a] to-[#1c9b72] p-4 text-white shadow-elevated sm:p-5" aria-labelledby="workspace-overview-heading">
+          <div className="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full border-[20px] border-white/10" />
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/65">Centro de ambientes</p>
-              <h1 id="workspace-overview-heading" className="max-w-lg text-[25px] font-extrabold leading-tight tracking-tight">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/70">Centro de ambientes</p>
+              <h2 id="workspace-overview-heading" className="mt-1 max-w-lg text-[19px] font-extrabold leading-snug tracking-tight sm:text-[22px]">
                 Um lugar certo para cada decisão financeira.
-              </h1>
-              <p className="mt-2 max-w-md text-[13px] font-medium leading-relaxed text-white/75">
-                O ambiente ativo controla o contexto dos seus dados. Workspaces arquivados continuam disponíveis para restauração.
-              </p>
+              </h2>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:min-w-[190px]">
-              <div className="rounded-[16px] border border-white/15 bg-black/10 px-3 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Ativos</p>
-                <p className="mt-1 text-[24px] font-extrabold">{active.length}</p>
+            <div className="grid grid-cols-2 gap-2 sm:min-w-[180px]">
+              <div className="rounded-[14px] border border-white/15 bg-black/15 px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-white/70">Ativos</p>
+                <p className="mt-0.5 text-[20px] font-extrabold leading-tight">{active.length}</p>
               </div>
-              <div className="rounded-[16px] border border-white/15 bg-black/10 px-3 py-3">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Arquivados</p>
-                <p className="mt-1 text-[24px] font-extrabold">{archived.length}</p>
+              <div className="rounded-[14px] border border-white/15 bg-black/15 px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-white/70">Arquivados</p>
+                <p className="mt-0.5 text-[20px] font-extrabold leading-tight">{archived.length}</p>
               </div>
             </div>
           </div>
@@ -648,6 +776,12 @@ export default function WorkspaceManagerPage() {
           <div className="flex items-center justify-between gap-3 rounded-[16px] border border-danger/20 bg-danger-tint px-4 py-3 text-[13px] font-semibold text-danger" role="alert">
             <span>{actionError}</span>
             <button type="button" aria-label="Fechar erro" onClick={() => setActionError(null)}><X size={16} /></button>
+          </div>
+        )}
+        {actionSuccess && (
+          <div className="flex items-center justify-between gap-3 rounded-[16px] border border-primary/25 bg-primary-tint px-4 py-3 text-[13px] font-semibold text-primary" role="status">
+            <span>{actionSuccess}</span>
+            <button type="button" aria-label="Fechar aviso" onClick={() => setActionSuccess(null)}><X size={16} /></button>
           </div>
         )}
 
@@ -699,35 +833,18 @@ export default function WorkspaceManagerPage() {
           </section>
 
           <aside className="space-y-4 lg:sticky lg:top-5" aria-label="Ações de workspace">
-            <Card elevation={2}>
-              <div className="mb-4 flex items-start gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-[13px] bg-primary-tint text-primary"><Plus size={19} /></span>
-                <div>
-                  <h2 className="text-[16px] font-extrabold text-text-primary">Criar workspace</h2>
-                  <p className="mt-1 text-[12px] leading-relaxed text-text-muted">Comece um contexto novo sem copiar seus lançamentos.</p>
-                </div>
-              </div>
-              <form className="space-y-3" onSubmit={(event) => void handleCreate(event)}>
-                <div>
-                  <label htmlFor="workspace-name" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Nome</label>
-                  <input id="workspace-name" aria-label="Nome do workspace" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Ex.: Casa, Empresa..." maxLength={120} className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none transition-colors focus:border-primary" />
-                </div>
-                <div>
-                  <label htmlFor="workspace-kind" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Tipo</label>
-                  <select id="workspace-kind" value={newKind} onChange={(event) => setNewKind(event.target.value as WorkspaceKind)} className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-primary">
-                    <option value="shared">Compartilhado</option>
-                    <option value="personal">Pessoal</option>
-                  </select>
-                </div>
-                <Button type="submit" className="w-full" loading={formBusy} disabled={!newName.trim()}>Criar workspace</Button>
-              </form>
-            </Card>
-
             <Card className="border-primary/15 bg-primary-tint/30">
               <div className="flex items-start gap-3">
                 <span className="flex h-9 w-9 items-center justify-center rounded-[11px] bg-surface-1 text-primary"><Users size={17} /></span>
-                <div>
-                  <h2 className="text-[13px] font-extrabold text-text-primary">Workspace ativo</h2>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <h2 className="text-[13px] font-extrabold text-text-primary">Workspace ativo</h2>
+                    {activeWorkspace && primaryWorkspaceId === activeWorkspace.id && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-warning-tint px-2 py-0.5 text-[10px] font-bold text-warning">
+                        <Star size={10} className="fill-current" aria-hidden="true" /> Principal
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 truncate text-[14px] font-bold text-primary">{activeWorkspace?.name ?? "Nenhum selecionado"}</p>
                   <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
                     {activeWorkspace?.kind === "shared" ? `${activeMembers} membro${activeMembers === 1 ? "" : "s"} com acesso a este ambiente.` : "Ambiente privado, somente para você."}
@@ -736,37 +853,66 @@ export default function WorkspaceManagerPage() {
               </div>
             </Card>
 
-{activeWorkspace?.kind === "shared" && (
-              <>
-                <Card elevation={2}>
-                  <div className="mb-3">
-                    <h2 className="text-[15px] font-extrabold text-text-primary">Convidar membro</h2>
-                    <p className="text-[11px] text-text-muted">Envie um convite por e-mail para adicionar alguém ao workspace.</p>
+            {activeWorkspace?.kind === "personal" && (
+              <Card elevation={2}>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[11px] bg-surface-2 text-text-secondary">
+                    <ArrowLeftRight size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-[14px] font-extrabold text-text-primary">Convites e titularidade</h2>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                      Espaços pessoais são exclusivos. Ative um workspace compartilhado para convidar pessoas ou transferir a titularidade.
+                    </p>
+                    {sharedActiveWorkspaces.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {sharedActiveWorkspaces.map((ws) => (
+                          <Button
+                            key={ws.id}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void selectWorkspace(ws.id)}
+                          >
+                            Ativar {ws.name}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <form onSubmit={(event) => void handleInvite(event)} className="space-y-3">
-                    <div>
-                      <label htmlFor="invite-email" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                        E-mail do convidado
-                      </label>
-                      <input
-                        id="invite-email"
-                        aria-label="E-mail do convidado"
-                        type="email"
-                        value={inviteEmail}
-                        onChange={(event) => setInviteEmail(event.target.value)}
-                        placeholder="email@exemplo.com"
-                        required
-                        className="h-10 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-primary"
-                      />
-                    </div>
-                    <Button type="submit" className="w-full" loading={inviteBusy} disabled={!inviteEmail.trim()}>
-                      Convidar membro
-                    </Button>
-                  </form>
-</Card>
-              </>
+                </div>
+              </Card>
             )}
-            {activeWorkspace?.role === "owner" && (
+
+            {activeWorkspace?.kind === "shared" && (
+              <Card elevation={2}>
+                <div className="mb-3">
+                  <h2 className="text-[15px] font-extrabold text-text-primary">Convidar membro</h2>
+                  <p className="text-[11px] text-text-muted">Envie um convite por e-mail para adicionar alguém ao workspace.</p>
+                </div>
+                <form onSubmit={(event) => void handleInvite(event)} className="space-y-3">
+                  <div>
+                    <label htmlFor="invite-email" className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-text-muted">
+                      E-mail do convidado
+                    </label>
+                    <input
+                      id="invite-email"
+                      aria-label="E-mail do convidado"
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(event) => setInviteEmail(event.target.value)}
+                      placeholder="email@exemplo.com"
+                      required
+                      className="h-10 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-primary"
+                    />
+                  </div>
+                  <Button type="submit" className="w-full" loading={inviteBusy} disabled={!inviteEmail.trim()}>
+                    Convidar membro
+                  </Button>
+                </form>
+              </Card>
+            )}
+            {activeWorkspace?.kind === "shared" && activeWorkspace.role === "owner" && (
               <>
                 <Card elevation={2}>
                   <div className="mb-3 flex items-center justify-between">
@@ -866,6 +1012,47 @@ export default function WorkspaceManagerPage() {
                 </Card>
               </>
             )}
+
+            {activeWorkspace?.kind === "shared" && activeWorkspace.role === "member" && (
+              <Card elevation={2}>
+                <div className="mb-3">
+                  <h2 className="text-[15px] font-extrabold text-text-primary">Minha participação</h2>
+                  <p className="text-[11px] text-text-muted">Se não precisar mais acessar este espaço, você pode sair dele a qualquer momento.</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full border-danger/30 text-danger hover:bg-danger-tint"
+                  onClick={() => setLeaveConfirmOpen(true)}
+                >
+                  <LogOut size={15} /> Sair do workspace
+                </Button>
+              </Card>
+            )}
+
+            <Card elevation={2}>
+              <div className="mb-4 flex items-start gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-[13px] bg-primary-tint text-primary"><Plus size={19} /></span>
+                <div>
+                  <h2 className="text-[16px] font-extrabold text-text-primary">Criar workspace</h2>
+                  <p className="mt-1 text-[12px] leading-relaxed text-text-muted">Comece um contexto novo sem copiar seus lançamentos.</p>
+                </div>
+              </div>
+              <form className="space-y-3" onSubmit={(event) => void handleCreate(event)}>
+                <div>
+                  <label htmlFor="workspace-name" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Nome</label>
+                  <input id="workspace-name" aria-label="Nome do workspace" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Ex.: Casa, Empresa..." maxLength={120} className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none transition-colors focus:border-primary" />
+                </div>
+                <div>
+                  <label htmlFor="workspace-kind" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">Tipo</label>
+                  <select id="workspace-kind" value={newKind} onChange={(event) => setNewKind(event.target.value as WorkspaceKind)} className="h-11 w-full rounded-[12px] border border-border-subtle bg-surface-2 px-3 text-[13px] font-medium text-text-primary outline-none focus:border-primary">
+                    <option value="shared">Compartilhado</option>
+                    <option value="personal">Pessoal</option>
+                  </select>
+                </div>
+                <Button type="submit" className="w-full" loading={formBusy} disabled={!newName.trim()}>Criar workspace</Button>
+              </form>
+            </Card>
           </aside>
         </div>
       </main>
@@ -1016,6 +1203,30 @@ export default function WorkspaceManagerPage() {
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={() => setAcceptTransferTarget(null)}>Cancelar</Button>
           <Button type="button" variant="primary" loading={transferBusy} onClick={() => void handleAcceptTransfer()}>Confirmar aceitação</Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={removeMemberTarget !== null}
+        onClose={() => setRemoveMemberTarget(null)}
+        title="Remover membro?"
+        description={`${removeMemberTarget?.name || removeMemberTarget?.email || "Este membro"} perderá acesso a este workspace imediatamente.`}
+      >
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => setRemoveMemberTarget(null)}>Cancelar</Button>
+          <Button type="button" variant="danger" loading={removeMemberBusy} onClick={() => void handleRemoveMember()}>Remover membro</Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={leaveConfirmOpen}
+        onClose={() => setLeaveConfirmOpen(false)}
+        title="Sair do workspace?"
+        description="Você perderá o acesso aos lançamentos e carteiras deste espaço até receber um novo convite."
+      >
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => setLeaveConfirmOpen(false)}>Cancelar</Button>
+          <Button type="button" variant="danger" loading={leaveBusy} onClick={() => void handleLeaveWorkspace()}>Sair do espaço</Button>
         </div>
       </Dialog>
     </div>

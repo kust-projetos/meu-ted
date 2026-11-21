@@ -7,11 +7,10 @@ import BottomSheet from "@/components/BottomSheet";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
-import { TedMark } from "@/components/brand/TedMark";
 import { useAppState } from "@/lib/state/app-state-context";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import type { Goal } from "@/lib/state/types";
-import { Plus, Target, Check, Calendar } from "lucide-react";
+import { Plus, Target, Check, CheckCircle2, Calendar } from "lucide-react";
 
 function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", {
@@ -54,6 +53,7 @@ function NewGoalSheet({
   }) => void;
   initialType?: "debt_payoff";
 }) {
+  const { markDirty, markClean } = useFormDirtySafe();
   const [name, setName] = useState("");
   const [type, setType] = useState<"savings" | "purchase" | "debt_payoff" | "emergency_fund">("savings");
   const [targetStr, setTargetStr] = useState("");
@@ -69,8 +69,14 @@ function NewGoalSheet({
       setName("");
       setTargetStr("");
       setType("savings");
+      markClean();
     }
-  }, [open]);
+  }, [open, markClean]);
+
+  function handleClose() {
+    markClean();
+    onClose();
+  }
 
   function handleSave() {
     if (!name.trim()) return;
@@ -82,10 +88,13 @@ function NewGoalSheet({
       targetAmountCents,
       startDate: new Date().toISOString().slice(0, 10),
     });
+    markClean();
     setName("");
     setTargetStr("");
     onClose();
   }
+
+  const canSave = Boolean(name.trim()) && parseBRLToCents(targetStr) > 0;
 
   const types = [
     { value: "savings" as const, label: "Poupança" },
@@ -95,8 +104,8 @@ function NewGoalSheet({
   ];
 
   return (
-    <BottomSheet open={open} onClose={onClose} title="Nova meta">
-      <div className="flex flex-col gap-4">
+    <BottomSheet open={open} onClose={handleClose} title="Nova meta">
+      <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
         <fieldset>
           <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-text-muted">
             Nome
@@ -128,8 +137,8 @@ function NewGoalSheet({
               className="w-full rounded-[14px] border border-border-subtle bg-surface-2 py-3 pl-11 pr-3.5 font-mono tabular-nums text-[16px] font-bold text-text-primary outline-none focus:border-primary" />
           </div>
         </fieldset>
-        <button type="button" onClick={handleSave}
-          className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98]">
+        <button type="button" onClick={handleSave} disabled={!canSave}
+          className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98] disabled:opacity-50">
           Salvar meta
         </button>
       </div>
@@ -148,27 +157,37 @@ function ContributeSheet({
   onClose: () => void;
   onContribute: (id: string, amountCents: number) => void;
 }) {
+  const { markDirty, markClean } = useFormDirtySafe();
   const [amountStr, setAmountStr] = useState("");
 
   useEffect(() => {
     if (!open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmountStr("");
+      markClean();
     }
-  }, [open]);
+  }, [open, markClean]);
+
+  function handleClose() {
+    markClean();
+    onClose();
+  }
 
   function handleSave() {
     if (!goal) return;
     const amountCents = parseBRLToCents(amountStr);
     if (amountCents <= 0) return;
     onContribute(goal.id, amountCents);
+    markClean();
     setAmountStr("");
     onClose();
   }
 
+  const canSave = Boolean(goal) && parseBRLToCents(amountStr) > 0;
+
   return (
-    <BottomSheet open={open} onClose={onClose} title="Adicionar valor">
-      <div className="flex flex-col gap-4">
+    <BottomSheet open={open} onClose={handleClose} title="Adicionar valor">
+      <div className="flex flex-col gap-4" onChangeCapture={markDirty}>
         {goal && (
           <div className="text-center rounded-[16px] border border-border-subtle bg-surface-2 p-3.5">
             <div className="text-[14px] font-bold text-text-primary">{goal.name}</div>
@@ -187,8 +206,8 @@ function ContributeSheet({
               className="w-full rounded-[14px] border border-border-subtle bg-surface-2 py-3 pl-11 pr-3.5 font-mono tabular-nums text-[16px] font-bold text-text-primary outline-none focus:border-primary" />
           </div>
         </fieldset>
-        <button type="button" onClick={handleSave}
-          className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98]">
+        <button type="button" onClick={handleSave} disabled={!canSave}
+          className="mt-2 w-full rounded-[14px] bg-primary py-3.5 text-center text-[15px] font-bold text-white shadow-fab transition-all hover:bg-primary-hover active:scale-[0.98] disabled:opacity-50">
           Adicionar
         </button>
       </div>
@@ -304,7 +323,7 @@ function GoalDetailSheet({
   );
 }
 
-export default function GoalsPage() {
+export default function GoalsPage({ embedded = false }: { embedded?: boolean }) {
   const { goals, debts, loading, error, writeError, clearWriteError, retryWriteError, createGoal, contributeToGoal, cancelGoal, updateGoal } = useAppState();
   const [tab, setTab] = useState<"goals" | "debts">("goals");
   const [createOpen, setCreateOpen] = useState(false);
@@ -316,8 +335,8 @@ export default function GoalsPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
@@ -338,19 +357,21 @@ export default function GoalsPage() {
   const visibleDebts = debts.length > 0 || debtGoals.length > 0;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-        <PageHeader
-          title="Metas & Dívidas"
-          action={
-            <button type="button" onClick={() => setChooseOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
-              <Plus size={15} strokeWidth={2.4} />
-              Nova
-            </button>
-          }
-        />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && (
+          <PageHeader
+            title="Metas & Dívidas"
+            action={
+              <button type="button" onClick={() => setChooseOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            }
+          />
+        )}
 
         {error && (
           <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">⚠ {error}</div>
@@ -361,15 +382,24 @@ export default function GoalsPage() {
         <StaleBanner domains={["goals"]} />
 
         <div className="px-5 sm:px-8 lg:px-12">
-          <div className="mb-4 flex gap-1.5 rounded-[14px] bg-surface-2 p-1 border border-border-subtle">
-            <button onClick={() => setTab("goals")}
-              className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${tab === "goals" ? "bg-surface-1 text-text-primary shadow-sm" : "text-text-muted hover:text-text-secondary"}`}>
-              Metas
-            </button>
-            <button onClick={() => setTab("debts")}
-              className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${tab === "debts" ? "bg-surface-1 text-text-primary shadow-sm" : "text-text-muted hover:text-text-secondary"}`}>
-              Dívidas
-            </button>
+          <div className="mb-4 flex items-center gap-2">
+            <div className="flex flex-1 gap-1.5 rounded-[14px] bg-surface-2 p-1 border border-border-subtle">
+              <button onClick={() => setTab("goals")}
+                className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${tab === "goals" ? "bg-surface-1 text-text-primary shadow-sm" : "text-text-muted hover:text-text-secondary"}`}>
+                Metas
+              </button>
+              <button onClick={() => setTab("debts")}
+                className={`flex-1 rounded-[10px] py-2.5 text-center text-[13px] font-bold transition-all ${tab === "debts" ? "bg-surface-1 text-text-primary shadow-sm" : "text-text-muted hover:text-text-secondary"}`}>
+                Dívidas
+              </button>
+            </div>
+            {embedded && (
+              <button type="button" onClick={() => setChooseOpen(true)}
+                className="flex flex-none items-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all">
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            )}
           </div>
         </div>
 
@@ -419,7 +449,7 @@ export default function GoalsPage() {
                     <div className="mb-2 text-[11px] font-medium text-text-muted">{formatPct(g.pct)} concluído</div>
                     {g.pct >= 100 && (
                       <div className="mb-2 flex items-center gap-2 rounded-[12px] bg-success-tint px-3 py-2">
-                        <TedMark size={24} variant="check" label="Meta batida" />
+                        <CheckCircle2 size={18} strokeWidth={2.2} role="img" aria-label="Meta batida" className="flex-none text-success" />
                         <span className="text-[12px] font-bold text-success">Meta batida!</span>
                       </div>
                     )}

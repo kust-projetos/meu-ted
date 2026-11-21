@@ -22,6 +22,8 @@ const context: WorkspaceContextValue = vi.hoisted(() => ({
   isOfflineReadOnly: false,
   offlineWorkspaceId: null,
   offlineBlockedReason: null,
+  primaryWorkspaceId: null as string | null,
+  setPrimaryWorkspace: vi.fn(),
   selectWorkspace: vi.fn(),
   refreshWorkspaces: vi.fn(),
   refreshMembers: vi.fn(),
@@ -241,5 +243,77 @@ describe("WorkspaceManagerPage", () => {
       context.error = null;
       context.refreshWorkspaces = vi.fn();
     }
+  });
+
+  it("allows setting and clearing the primary workspace", async () => {
+    const user = userEvent.setup();
+    context.primaryWorkspaceId = null;
+    render(<WorkspaceManagerPage />);
+
+    await user.click(screen.getByRole("button", { name: "Definir Minhas Finanças como principal" }));
+    expect(context.setPrimaryWorkspace).toHaveBeenCalledWith("ws-1");
+
+    context.primaryWorkspaceId = "ws-1";
+    render(<WorkspaceManagerPage />);
+    await user.click(screen.getByRole("button", { name: "Remover Minhas Finanças como principal" }));
+    expect(context.setPrimaryWorkspace).toHaveBeenCalledWith(null);
+    context.primaryWorkspaceId = null;
+  });
+
+  it("offers quick switch to shared workspace when personal is active, and lets owner remove active members", async () => {
+    const user = userEvent.setup();
+    context.workspaces = [
+      { id: "ws-1", name: "Minhas Finanças", kind: "personal", role: "owner", status: "active" },
+      { id: "ws-shared", name: "Casa", kind: "shared", role: "owner", status: "active" },
+    ];
+    context.activeWorkspace = context.workspaces[0]!;
+    const { rerender } = render(<WorkspaceManagerPage />);
+
+    await user.click(screen.getByRole("button", { name: "Ativar Casa" }));
+    expect(context.selectWorkspace).toHaveBeenCalledWith("ws-shared");
+
+    context.activeWorkspace = context.workspaces[1]!;
+    context.members = [
+      { userId: "u1", name: "Alice", email: "alice@example.com", role: "owner", status: "active" },
+      { userId: "u2", name: "Ana Paula", email: "ana@example.com", role: "member", status: "active" },
+    ];
+    rerender(<WorkspaceManagerPage />);
+
+    await user.click(screen.getByRole("button", { name: "Remover Ana Paula" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Remover membro?");
+    await user.click(screen.getByRole("button", { name: "Remover membro" }));
+    expect(context.removeMember).toHaveBeenCalledWith("u2");
+
+    context.workspaces = [
+      { id: "ws-1", name: "Minhas Finanças", kind: "personal", role: "owner", status: "active" },
+      { id: "ws-2", name: "Empresa LTDA", kind: "shared", role: "owner", status: "archived" },
+    ];
+    context.activeWorkspace = context.workspaces[0]!;
+    context.members = [];
+  });
+
+  it("allows a non-owner member to leave the shared workspace", async () => {
+    const user = userEvent.setup();
+    context.workspaces = [
+      { id: "ws-shared", name: "Casa", kind: "shared", role: "member", status: "active" },
+    ];
+    context.activeWorkspace = context.workspaces[0]!;
+    context.members = [
+      { userId: "u1", name: "Alice", email: "alice@example.com", role: "owner", status: "active" },
+      { userId: "u2", name: "Bob", email: "bob@example.com", role: "member", status: "active" },
+    ];
+
+    render(<WorkspaceManagerPage />);
+    await user.click(screen.getByRole("button", { name: "Sair do workspace" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Sair do workspace?");
+    await user.click(screen.getByRole("button", { name: "Sair do espaço" }));
+    expect(context.leave).toHaveBeenCalled();
+
+    context.workspaces = [
+      { id: "ws-1", name: "Minhas Finanças", kind: "personal", role: "owner", status: "active" },
+      { id: "ws-2", name: "Empresa LTDA", kind: "shared", role: "owner", status: "archived" },
+    ];
+    context.activeWorkspace = context.workspaces[0]!;
+    context.members = [];
   });
 });

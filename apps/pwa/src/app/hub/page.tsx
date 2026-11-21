@@ -6,15 +6,18 @@ import type { ComponentType } from "react";
 import {
   BarChart3,
   Bell,
-  ChevronRight,
-  FolderOpen,
-  Settings,
-  Target,
-  Wallet,
-  Layers,
-  User,
-  ClipboardList,
+  Calculator,
   CalendarClock,
+  ChevronRight,
+  ClipboardList,
+  CreditCard,
+  Flag,
+  FolderOpen,
+  Landmark,
+  Layers,
+  Settings,
+  TrendingUp,
+  User,
   type LucideProps,
 } from "lucide-react";
 
@@ -27,11 +30,11 @@ interface HubModule {
 
 const MODULES: HubModule[] = [
   { href: "/compromissos", label: "Compromissos", description: "Contas a pagar e pendências", Icon: CalendarClock },
-  { href: "/hub/patrimonio?aba=contas", label: "Contas", description: "Suas contas em um lugar", Icon: Wallet },
-  { href: "/hub/patrimonio?aba=cartoes", label: "Cartões", description: "Seus cartões", Icon: Wallet },
-  { href: "/hub/planejamento", label: "Planejamento", description: "Orçamentos e assinaturas", Icon: Target },
-  { href: "/hub/planejamento?aba=metas", label: "Metas", description: "Acompanhe seus objetivos", Icon: Target },
-  { href: "/hub/patrimonio?aba=patrimonio", label: "Patrimônio", description: "Visão do seu patrimônio", Icon: Wallet },
+  { href: "/hub/patrimonio?aba=contas", label: "Contas", description: "Suas contas em um lugar", Icon: Landmark },
+  { href: "/hub/patrimonio?aba=cartoes", label: "Cartões", description: "Seus cartões", Icon: CreditCard },
+  { href: "/hub/planejamento", label: "Planejamento", description: "Orçamentos e assinaturas", Icon: Calculator },
+  { href: "/hub/planejamento?aba=metas", label: "Metas", description: "Acompanhe seus objetivos", Icon: Flag },
+  { href: "/hub/patrimonio?aba=patrimonio", label: "Patrimônio", description: "Visão do seu patrimônio", Icon: TrendingUp },
   { href: "/hub/relatorios", label: "Relatórios", description: "Fluxo, categorias e tendências", Icon: BarChart3 },
   { href: "/hub/alertas", label: "Avisos e Lembretes", description: "Alertas financeiros e de preço", Icon: Bell },
   { href: "/hub/categorias", label: "Categorias", description: "Organize seus lançamentos", Icon: FolderOpen },
@@ -47,11 +50,11 @@ const MODULES: HubModule[] = [
 export default function Hub() {
   return (
     <AppShell>
-      <div className="flex min-h-dvh flex-col bg-bg pb-[var(--tab-bar-height)]">
+      <div className="flex min-h-dvh flex-col bg-bg pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
         <StatusBar />
-        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-4 sm:px-8 lg:px-12">
-          <PageHeader title="Explorar" subtitle="Tudo o que você precisa no Meu Ted em um só lugar." />
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <PageHeader title="Explorar" subtitle="Tudo o que você precisa no Meu Ted em um só lugar." />
+        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 pb-4 pt-2 sm:px-8 lg:px-12">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {MODULES.map((module) => (
               <Link
                 key={module.href}

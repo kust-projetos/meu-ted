@@ -16,6 +16,7 @@ export interface MacroSlice {
 export function useCategoryBreakdown(
   transactions: Transaction[],
   categories: Category[],
+  kind: "expense" | "income" = "expense",
 ): MacroSlice[] {
   return useMemo(() => {
     const today = new Date();
@@ -38,7 +39,7 @@ export function useCategoryBreakdown(
     const macroTotals = new Map<string, number>();
     let total = 0;
     for (const t of transactions) {
-      if (t.kind !== "expense") continue;
+      if (t.kind !== kind) continue;
       const match = /^(\d{4})-(\d{2})-\d{2}/.exec(t.date);
       if (!match || Number(match[1]) !== currentYear || Number(match[2]) - 1 !== currentMonth) continue;
       total += t.amountCents;
@@ -57,5 +58,5 @@ export function useCategoryBreakdown(
         pct: (amountCents / denom) * 100,
       }))
       .sort((a, b) => b.amountCents - a.amountCents);
-  }, [transactions, categories]);
+  }, [transactions, categories, kind]);
 }

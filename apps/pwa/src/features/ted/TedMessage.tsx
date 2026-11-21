@@ -55,7 +55,21 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
 
   return (
     <div className={`flex w-full gap-2.5 ${isCurrentUser ? "justify-end" : "justify-start"} my-3`}>
-      {!isCurrentUser && (
+      {!isCurrentUser && isAssistant && (
+        <span
+          className="flex h-7 w-7 flex-none overflow-hidden rounded-full shadow-xs ring-1 ring-primary/25"
+          aria-hidden="true"
+        >
+          <img
+            src="/brand/ted-launcher.png"
+            alt=""
+            width={28}
+            height={28}
+            className="h-full w-full object-cover"
+          />
+        </span>
+      )}
+      {!isCurrentUser && !isAssistant && (
         <span
           className="flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-bold text-white shadow-xs"
           style={{ background: avatarColor(message.actorId, message.role) }}
@@ -75,6 +89,7 @@ export function TedMessage({ message, isCurrentUser, senderName, delivery, onRet
           {isAssistant && <span className="inline-flex items-center rounded-full bg-primary-tint px-1.5 py-0.2 text-[9px] font-bold tracking-wide text-primary">IA</span>}
         </div>
         <div
+          data-testid="ted-message-bubble"
           className={`relative rounded-[16px] px-3.5 py-2.5 text-[13.5px] leading-relaxed shadow-xs ${
             isCurrentUser
               ? "rounded-br-[4px] bg-primary text-white shadow-fab"

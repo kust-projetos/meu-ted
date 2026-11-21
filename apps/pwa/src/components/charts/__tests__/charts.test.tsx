@@ -394,9 +394,9 @@ describe("KpiCard", () => {
     expect(negative.className).not.toMatch(/text-text-primary/);
 
     rerender(<KpiCard label="Taxa de poupança" value="—" deltaText={null} />);
-    // Valor e delta vazios rendem "—" duas vezes; o valor (primeiro) segue neutro.
+    // Sem delta/sparkline, apenas o valor neutro "—" é exibido.
     const dashes = screen.getAllByText("—");
-    expect(dashes).toHaveLength(2);
+    expect(dashes).toHaveLength(1);
     expect(dashes[0]!.className).toMatch(/text-text-primary/);
     expect(dashes[0]!.className).not.toMatch(/text-danger/);
   });

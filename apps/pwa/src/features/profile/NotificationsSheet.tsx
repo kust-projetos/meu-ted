@@ -236,15 +236,13 @@ export default function NotificationsSheet({
 
   const panel = (
     <>
-      <PushNotificationsCard workspaceId={workspaceId ?? workspace?.activeWorkspace?.id} />
-      <div className="mb-4 rounded-[18px] bg-fill-light p-4">
-        <div className="mb-1 text-[15px] font-bold text-text-primary">
-          Alertas do Meu Ted
-        </div>
-        <p className="text-[13px] leading-relaxed text-text-secondary">
-          Priorizados por urgência com base nos seus dados reais.
-        </p>
-      </div>
+      <PushNotificationsCard
+        workspaceId={workspaceId ?? workspace?.activeWorkspace?.id}
+        hideWhenActive={!inline}
+      />
+      <p className="mb-3 text-xs font-medium text-text-muted">
+        <strong className="font-semibold text-text-secondary">Alertas do Meu Ted</strong> · priorizados por urgência.
+      </p>
 
       {items.length === 0 && (
         <div className="rounded-[16px] border border-border bg-fill-light px-4 py-6 text-center text-[13px] text-text-muted">

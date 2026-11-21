@@ -19,7 +19,7 @@ function formatBRL(cents: number): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(cents / 100);
 }
 
-export default function PriceAlertsPage() {
+export default function PriceAlertsPage({ embedded = false }: { embedded?: boolean }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,10 +104,10 @@ export default function PriceAlertsPage() {
 
   if (unavailable) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
-        <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-          <PageHeader title="Alertas de Preço" />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
+        <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+          {!embedded && <PageHeader title="Alertas de Preço" />}
           <div className="px-5 sm:px-8 lg:px-12">
             <div className="py-10 text-center">
               <div className="mb-2 flex h-12 w-12 mx-auto items-center justify-center rounded-full bg-surface-2 text-text-muted shadow-xs">
@@ -123,10 +123,10 @@ export default function PriceAlertsPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-        <PageHeader title="Alertas de Preço" />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && <PageHeader title="Alertas de Preço" />}
         <div className="px-5 sm:px-8 lg:px-12">
           <form onSubmit={handleSubmit} className="mb-6 rounded-[18px] border border-border-subtle bg-surface-1 p-4 shadow-card">
             <h2 className="mb-3 text-[14px] font-bold text-text-primary">Novo alerta</h2>

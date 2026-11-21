@@ -18,7 +18,8 @@ describe("PageHeader morphing (item premium 1)", () => {
     expect(container.innerHTML).toMatch(/var\(--page-pt\)/);
   });
 
-  it("renders subtitle, action and profile avatar", () => {
+  it("renders subtitle, action and global floating menu without standalone profile icon", async () => {
+    const user = await import("@testing-library/user-event").then((m) => m.default.setup());
     render(
       <PageHeader
         title="Registros"
@@ -28,7 +29,11 @@ describe("PageHeader morphing (item premium 1)", () => {
     );
     expect(screen.getByText("Tudo que entrou e saiu")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ação" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Abrir perfil" })).toHaveAttribute("href", "/perfil");
+    expect(screen.queryByRole("link", { name: "Abrir perfil" })).not.toBeInTheDocument();
+
+    const menuButton = screen.getByRole("button", { name: "Abrir menu" });
+    await user.click(menuButton);
+    expect(screen.getByRole("link", { name: "Meu Perfil" })).toHaveAttribute("href", "/perfil");
   });
 
   it("mounts the compact bar only past 20px", () => {

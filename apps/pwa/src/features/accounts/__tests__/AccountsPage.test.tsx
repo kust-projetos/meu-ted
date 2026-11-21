@@ -192,16 +192,16 @@ describe("AccountsPage", () => {
       expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ name: "Banco X", kind: "bank", initialBalanceCents: 100000 }));
     });
 
-    it("saves with empty name + non-default bank color using bankColor as name", () => {
+    it("saves with empty name + selected institution using institution name", () => {
       const addSpy = vi.fn();
       vi.spyOn(appStateModule, "useAppState").mockReturnValue(mockState({ addAccount: addSpy }));
       render(<AccountsPage />);
       fireEvent.click(screen.getByText("Nova"));
       const dialog = screen.getByRole("dialog");
       fireEvent.focus(within(dialog).getByRole("combobox"));
-      fireEvent.click(within(dialog).getByText("Caixa Econômica Federal"));
+      fireEvent.click(within(dialog).getByText("Caixa"));
       fireEvent.click(within(dialog).getByText("Salvar conta"));
-      expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ name: "#005CA9" }));
+      expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({ name: "Caixa" }));
     });
 
     it("renders kind buttons and saves with investment kind", () => {
@@ -325,7 +325,7 @@ describe("AccountsPage - presentation payload + failure UX", () => {
     fireEvent.click(screen.getByText("Nova"));
     const dialog = screen.getByRole("dialog");
     fireEvent.focus(within(dialog).getByRole("combobox"));
-    fireEvent.click(within(dialog).getByText("Itaú Unibanco"));
+    fireEvent.click(within(dialog).getByText("Itaú"));
     fireEvent.change(within(dialog).getByPlaceholderText(/Nubank, Itaú/i), { target: { value: "Banco Laranja" } });
     fireEvent.click(within(dialog).getByText("Salvar conta"));
     expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({

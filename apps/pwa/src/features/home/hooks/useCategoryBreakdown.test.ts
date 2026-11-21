@@ -83,4 +83,43 @@ describe("useCategoryBreakdown", () => {
     const { result } = renderHook(() => useCategoryBreakdown([], []));
     expect(result.current).toEqual([]);
   });
+
+  it("aggregates income categories separately when kind is 'income'", () => {
+    const today = new Date();
+    const ymDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-08`;
+    const { result } = renderHook(() =>
+      useCategoryBreakdown(
+        [
+          {
+            id: "i1",
+            description: "Salário",
+            amountCents: 800000,
+            date: ymDate,
+            kind: "income",
+            categoryId: "sal",
+            accountId: "acc1",
+          },
+          {
+            id: "i2",
+            description: "Freela",
+            amountCents: 200000,
+            date: ymDate,
+            kind: "income",
+            categoryId: "fre",
+            accountId: "acc1",
+          },
+          tx("e1", 999900, "food"),
+        ],
+        [
+          { id: "sal", name: "Salário", kind: "income", icon: "Banknote" },
+          { id: "fre", name: "Freelas", kind: "income", icon: "Laptop" },
+          cat("food", "Alimentação"),
+        ],
+        "income",
+      ),
+    );
+    expect(result.current).toHaveLength(2);
+    expect(result.current[0]).toMatchObject({ name: "Salário", amountCents: 800000, pct: 80 });
+    expect(result.current[1]).toMatchObject({ name: "Freelas", amountCents: 200000, pct: 20 });
+  });
 });

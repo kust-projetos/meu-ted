@@ -30,6 +30,7 @@ import type { MutationReceipt } from "@pi-finance/llm-contracts/types";
 import { isActionablePendingOperationPresentation } from "@pi-finance/llm-contracts/types";
 import type { PendingOperationDecision, UndoDecision } from "@/lib/api/agent-client";
 import { notifyPendingOperationsChanged } from "@/lib/state/use-pending-operations";
+import { AppFloatingMenu } from "@/components/AppFloatingMenu";
 
 import { Sparkles, Send, RefreshCw, Lock, X } from "lucide-react";
 
@@ -269,6 +270,20 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const focusedCardRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const el = messageInputRef.current;
+    if (!el) return;
+    if (!input) {
+      el.style.height = "";
+      el.style.overflowY = "hidden";
+      return;
+    }
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, 112);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > 112 ? "auto" : "hidden";
+  }, [input]);
   const prevWorkspaceIdRef = useRef<string | null>(null);
   // A02/R02 (AC07): live authenticated scope, mirrored on every workspace
   // change. An in-flight turn is bound to the scope that issued it — a result
@@ -1243,10 +1258,16 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[22px] border border-border-subtle bg-surface-1"
     >
         {/* Header */}
-        <div className="relative flex items-center justify-between border-b border-border-subtle bg-surface-2/80 px-4 py-3.5 backdrop-blur-md">
+        <div className="relative z-30 flex items-center justify-between border-b border-border-subtle bg-surface-2/80 px-4 py-3.5 backdrop-blur-md">
           <div className="flex items-center gap-3">
-            <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-primary to-[#0A3A28] text-sm font-bold text-white shadow-fab">
-              TED
+            <span className="relative flex h-10 w-10 flex-none items-center justify-center rounded-full shadow-fab ring-1 ring-primary/25">
+              <img
+                src="/brand/ted-launcher.png"
+                alt=""
+                width={40}
+                height={40}
+                className="h-full w-full rounded-full object-cover"
+              />
               <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-surface-1 shadow-xs">
                 <span className="h-2 w-2 rounded-full bg-primary" />
               </span>
@@ -1261,7 +1282,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               <div className="text-[11px] font-medium leading-none text-text-muted">{activeWorkspace ? activeWorkspace.name : "Selecione um workspace"}</div>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => void handleNewPrivateSession()}
@@ -1282,6 +1303,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
             >
               <RefreshCw size={14} />
             </button>
+            <AppFloatingMenu compact />
           </div>
         </div>
 
@@ -1294,9 +1316,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         >
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-[#0A3A28] text-white shadow-fab">
-                <Sparkles size={28} />
-              </div>
+              <img
+                src="/brand/ted-launcher.png"
+                alt=""
+                width={56}
+                height={56}
+                className="mb-4 h-14 w-14 rounded-full object-cover shadow-fab ring-2 ring-primary/25"
+              />
               <h3 className="text-[16px] font-bold tracking-tight text-text-primary">Olá! Sou o TED.</h3>
               <p className="mt-1.5 max-w-[280px] text-[13px] leading-relaxed text-text-muted">
                 Seu co-piloto financeiro. Posso analisar despesas, consultar metas, simular pagamentos e te ajudar a manter o orçamento no azul.
@@ -1429,9 +1455,13 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
 
           {status === "streaming" && (
             <div className="flex items-center gap-2 py-3">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-primary to-[#0A3A28] text-white shadow-xs">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
-              </span>
+              <img
+                src="/brand/ted-launcher.png"
+                alt=""
+                width={28}
+                height={28}
+                className="h-7 w-7 animate-pulse rounded-full object-cover shadow-xs ring-1 ring-primary/25"
+              />
               <span className="rounded-full bg-surface-1 border border-border-subtle px-3 py-1.5 text-xs font-semibold text-text-secondary shadow-xs">TED está escrevendo…</span>
             </div>
           )}
@@ -1476,9 +1506,9 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
         )}
 
         {/* Footer Input */}
-        <form onSubmit={handleSend} className="border-t border-border-subtle bg-surface-1 p-3 pb-[env(safe-area-inset-bottom)]">
+        <form onSubmit={handleSend} className="border-t border-border-subtle bg-surface-1 px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
           {/* Attachment previews */}
-          <div className="flex items-end gap-1.5 rounded-[16px] border border-border-subtle bg-surface-2 px-2 py-2 shadow-xs transition-colors focus-within:border-primary focus-within:bg-surface-1">
+          <div className="flex items-end gap-2 rounded-[20px] border border-border-subtle bg-surface-2 py-1.5 pl-3.5 pr-1.5 shadow-xs transition-colors focus-within:border-primary focus-within:bg-surface-1">
             <textarea
               ref={messageInputRef}
               value={input}
@@ -1492,7 +1522,7 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
               placeholder="Pergunte sobre gastos, metas ou pagamentos…"
               aria-label="Mensagem para o assistente"
               rows={1}
-              className="max-h-28 min-h-[44px] flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-5 text-text-primary placeholder:text-text-muted focus:outline-none"
+              className="max-h-28 min-h-[36px] flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[13px] leading-[1.35] text-text-primary placeholder:truncate placeholder:text-[12.5px] placeholder:text-text-muted focus:outline-none"
             />
             {loading && canCancelTurn ? (
               <button

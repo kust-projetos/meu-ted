@@ -23,7 +23,10 @@ import {
   clearOfflineWorkspaceBinding,
   advanceOfflineGeneration,
 } from "@/lib/auth/offline-identity";
-import { clearActiveWorkspacePreference } from "@/lib/auth/active-workspace-preference";
+import {
+  clearActiveWorkspacePreference,
+  clearPrimaryWorkspacePreference,
+} from "@/lib/auth/active-workspace-preference";
 import { deleteV2Snapshot, deleteV3Snapshot } from "@/lib/state/snapshot-db";
 import { clearActiveWorkspaceId } from "@/lib/api/client";
 import { clearAgentSession } from "@/lib/api/agent-auth";
@@ -160,6 +163,7 @@ export async function clearSensitiveSession(
     // down — a later login (possibly another user on a shared device) must
     // never remount on the previous session's workspace.
     try { clearActiveWorkspacePreference(); } catch { /* noop */ }
+    try { clearPrimaryWorkspacePreference(); } catch { /* noop */ }
   }
   if (doWorkspaceBinding) {
     // Workspace-switch teardown ordering (AUTH-T07 race review, T07a sync):

@@ -9,8 +9,8 @@ import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
 import { ConfirmActionDialog } from "@/components/ConfirmActionDialog";
 import { useAppState } from "@/lib/state/app-state-context";
-import { Plus, ChevronRight, FileText } from "lucide-react";
-import { resolveBankPreset } from "@/lib/bank-presets";
+import type { Account } from "@/lib/state/types";
+import { Plus, ChevronRight, FileText, Wallet } from "lucide-react";
 import { InstitutionPicker } from "@/components/brand/InstitutionPicker";
 import { InstitutionMark } from "@/components/brand/InstitutionMark";
 import { getInstitution, normalize, resolveInstitution, type Institution } from "@/lib/institutions/catalog";
@@ -44,6 +44,7 @@ const ACCOUNT_KINDS = [
   { value: "checking", label: "Conta corrente" },
   { value: "savings", label: "Poupança" },
   { value: "investment", label: "Investimento" },
+  { value: "cash", label: "Dinheiro" },
 ];
 
 /**
@@ -106,7 +107,12 @@ function AccountFormSheet({
   const [manualInstitutionName, setManualInstitutionName] = useState("");
 
   async function handleSave() {
-    const displayName = name.trim() || (bankColor === "#820AD1" ? "Nubank" : bankColor);
+    const selectedInstitution = institutionId ? getInstitution(institutionId) : undefined;
+    const displayName =
+      name.trim() ||
+      selectedInstitution?.name ||
+      manualInstitutionName.trim() ||
+      (kind === "cash" ? "Carteira" : "Conta");
     const apiKind = toApiAccountKind(kind);
     const initialBalanceCents = parseBRLToCents(balance);
     // ADR-018: bank/cash may open negative; credit_card must never be
@@ -303,28 +309,38 @@ function AccountDetailSheet({
     }
   }
 
-  const preset = account ? resolveBankPreset({ name: account.name, color: account.color }) : null;
-  const institution = getInstitution(appearance?.institutionId ?? "") ?? resolveInstitution({ name: account.name, color: account.color });
+  const { institution } = resolveAccountPresentation(account as Account, appearance);
+  const accentColor = institution?.colors.primary;
   return (
     <BottomSheet open={open} onClose={onClose} title="Detalhes da conta">
       <div className="flex flex-col gap-4">
         {/* Header with bank identity */}
-        <div className="flex items-center gap-3 rounded-[16px] border p-3.5" style={{ background: preset ? `linear-gradient(135deg, ${preset.primaryColor}14, var(--surface-2))` : undefined, borderColor: preset ? `${preset.primaryColor}30` : undefined }}>
-          {institution ? <InstitutionMark institution={institution} size="md" /> : <span
-            className="flex h-10 w-10 items-center justify-center rounded-[12px] text-[12px] font-black text-white shadow-sm"
-            style={{ background: preset?.gradient ?? "#4A5568", color: preset?.textColor ?? "#fff" }}
-            aria-hidden="true"
-          >
-            {preset ? preset.shortName.slice(0, 2).toUpperCase() : account.name.slice(0, 2).toUpperCase()}
-          </span>}
+        <div
+          className="flex items-center gap-3 rounded-[16px] border border-border-subtle bg-surface-2 p-3.5"
+          style={
+            accentColor
+              ? {
+                  background: `linear-gradient(135deg, ${accentColor}14, var(--surface-2))`,
+                  borderColor: `${accentColor}30`,
+                }
+              : undefined
+          }
+        >
+          {account.kind === "cash" && !institution ? (
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-1 text-text-secondary shadow-xs" aria-hidden="true">
+              <Wallet size={20} strokeWidth={2} />
+            </span>
+          ) : (
+            <InstitutionMark institution={institution} size="md" />
+          )}
           <div className="flex-1 min-w-0">
             <div className="truncate text-[14px] font-bold text-text-primary">{account.name}</div>
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
               <span>{kindLabel(account.kind)}</span>
-              {preset && (
+              {institution && (
                 <>
                   <span className="h-1 w-1 rounded-full bg-border-subtle" />
-                  <span style={{ color: preset.primaryColor }}>{preset.name}</span>
+                  <span className="font-semibold text-text-secondary">{institution.name}</span>
                 </>
               )}
             </div>
@@ -404,7 +420,7 @@ function AccountDetailSheet({
   );
 }
 
-export default function AccountsPage() {
+export default function AccountsPage({ embedded = false }: { embedded?: boolean }) {
   const { accounts, transactions, loading, error, writeError, clearWriteError, retryWriteError, addAccount, updateAccount, deactivateAccount } = useAppState();
   const [createOpen, setCreateOpen] = useState(false);
   const [detailAccount, setDetailAccount] = useState<(typeof accounts)[0] | null>(null);
@@ -443,8 +459,8 @@ export default function AccountsPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
@@ -468,22 +484,24 @@ export default function AccountsPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-        <PageHeader
-          title="Contas"
-          action={
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
-            >
-              <Plus size={15} strokeWidth={2.4} />
-              Nova
-            </button>
-          }
-        />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && (
+          <PageHeader
+            title="Contas"
+            action={
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            }
+          />
+        )}
 
         {error && (
           <div className="mx-5 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
@@ -498,37 +516,47 @@ export default function AccountsPage() {
         <div className="px-5 sm:px-8 lg:px-12">
           {/* Total balance card */}
           <div
-            className="mb-4 overflow-hidden rounded-[20px] px-5 py-5 text-white shadow-card"
+            className="mb-4 flex items-center justify-between gap-3 overflow-hidden rounded-[20px] px-5 py-5 text-white shadow-card"
             style={{
               background: "linear-gradient(165deg, #0F6B45, #0A3A28)",
             }}
           >
-            <div className="mb-1 text-[12px] font-medium text-white/70">
-              Saldo somado
+            <div>
+              <div className="mb-1 text-[12px] font-medium text-white/70">
+                Saldo somado
+              </div>
+              <div className="mb-1 font-mono tabular-nums text-[28px] font-bold tracking-tight text-white">
+                {formatBRL(totalBalance)}
+              </div>
+              <div className="text-[11px] font-medium text-white/70">
+                {checkingAccounts.length}{" "}
+                {checkingAccounts.length === 1 ? "conta" : "contas"}
+              </div>
             </div>
-            <div className="mb-1 font-mono tabular-nums text-[28px] font-bold tracking-tight text-white">
-              {formatBRL(totalBalance)}
-            </div>
-            <div className="text-[11px] font-medium text-white/70">
-              {checkingAccounts.length}{" "}
-              {checkingAccounts.length === 1 ? "conta" : "contas"}
-            </div>
+            {embedded && (
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex flex-none items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[12px] font-bold text-[#0A3A28] shadow-sm transition-all hover:bg-white/90 active:scale-95"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            )}
           </div>
 
           {/* Account cards with bank identity */}
           <div className="flex flex-col gap-3">
             {checkingAccounts.map((acc) => {
-              // Name-key fallback keeps appearance readable when a synced id differs from its optimistic key.
-              const institutionId = appearanceFor(acc.id, acc.name)?.institutionId;
               const institution = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name)).institution;
-              const preset = resolveBankPreset({ name: acc.name, color: acc.color });
+              const accentColor = institution?.colors.primary;
               return (
                 <button
                   type="button"
                   key={acc.id}
                   data-testid="account-card"
                   data-account-id={acc.id}
-                  data-bank={preset.id}
+                  data-bank={institution?.id ?? "custom"}
                   data-highlighted={detailAccount?.id === acc.id ? "true" : "false"}
                   onClick={() => setDetailAccount(acc)}
                   className={`relative w-full overflow-hidden rounded-[18px] border bg-surface-1 px-4 py-3.5 pr-11 shadow-card transition-all text-left hover:bg-surface-2/60 ${
@@ -536,24 +564,28 @@ export default function AccountsPage() {
                       ? "border-primary ring-2 ring-primary/30"
                       : "border-border-subtle"
                   }`}
-                  style={{
-                    borderColor: detailAccount?.id === acc.id ? undefined : `${preset.primaryColor}22`,
-                    background: `linear-gradient(90deg, ${preset.primaryColor}0F 0%, transparent 45%), var(--surface-1)`,
-                  }}
+                  style={
+                    accentColor
+                      ? {
+                          borderColor: detailAccount?.id === acc.id ? undefined : `${accentColor}26`,
+                          background: `linear-gradient(90deg, ${accentColor}0F 0%, transparent 45%), var(--surface-1)`,
+                        }
+                      : undefined
+                  }
                 >
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute left-0 top-0 h-full w-[4px]"
-                    style={{ background: preset.gradient }}
+                    style={{ background: accentColor ?? "var(--color-border-medium)" }}
                   />
                   <div className="flex items-center gap-3">
-                    {institution ? <InstitutionMark institution={institution} size="md" /> : <span
-                      className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[11px] font-black text-white shadow-sm"
-                      style={{ background: preset.gradient, color: preset.textColor }}
-                      aria-hidden="true"
-                    >
-                      {preset.shortName.slice(0, 2).toUpperCase()}
-                    </span>}
+                    {acc.kind === "cash" && !institution ? (
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-text-secondary" aria-hidden="true">
+                        <Wallet size={20} strokeWidth={2} />
+                      </span>
+                    ) : (
+                      <InstitutionMark institution={institution} size="md" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="truncate text-[14px] font-bold text-text-primary">
                         {acc.name}
@@ -574,10 +606,14 @@ export default function AccountsPage() {
                                       ? "Conta"
                                       : "Outro"}
                         </span>
-                        <span className="h-1 w-1 rounded-full bg-border-subtle" />
-                        <span className="truncate font-semibold" style={{ color: preset.primaryColor }}>
-                          {preset.name}
-                        </span>
+                        {institution && (
+                          <>
+                            <span className="h-1 w-1 rounded-full bg-border-subtle" />
+                            <span className="truncate font-semibold text-text-secondary">
+                              {institution.name}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                     <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">

@@ -43,12 +43,13 @@ describe("TedChatLauncher (page navigation)", () => {
     expect(fab).not.toHaveAttribute("aria-expanded");
   });
 
-  it("keeps a >= 44px touch target (56px FAB with visible TED label)", () => {
-    render(<TedChatLauncher />);
+  it("keeps a >= 44px touch target (56px circular FAB with TED logo only)", () => {
+    const { container } = render(<TedChatLauncher />);
     const fab = screen.getByRole("button", { name: "Abrir assistente TED" });
     expect(fab.className).toMatch(/h-14/);
     expect(fab.className).toMatch(/min-w-14/);
-    expect(screen.getByTestId("ted-launcher-label")).toHaveTextContent("TED");
+    expect(screen.queryByTestId("ted-launcher-label")).not.toBeInTheDocument();
+    expect(container.querySelector('img[src="/brand/ted-launcher.png"]')).toBeInTheDocument();
   });
 
   it("navigates to /ted when the FAB is activated", async () => {

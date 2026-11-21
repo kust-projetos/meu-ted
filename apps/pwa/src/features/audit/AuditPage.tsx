@@ -63,7 +63,7 @@ export default function AuditPage() {
     <div className="flex min-h-dvh flex-col bg-bg">
       <StatusBar />
       <PageHeader title="Auditoria" />
-      <main className="flex flex-1 flex-col gap-4 px-5 pb-[var(--tab-bar-height)] sm:px-8 lg:px-12">
+      <main className="flex flex-1 flex-col gap-4 px-5 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:px-8 lg:px-12 lg:pb-8">
         <AdoptionMetrics />
         {/* Filters */}
         <div className="rounded-[18px] border border-border-subtle bg-surface-1 p-4 shadow-card">
@@ -111,8 +111,8 @@ export default function AuditPage() {
                 data-testid="filter-actorType"
               >
                 <option value="">Todos</option>
-                <option value="device">device</option>
-                <option value="user">user</option>
+                <option value="device">Dispositivo</option>
+                <option value="user">Usuário</option>
               </select>
             </fieldset>
           </div>
@@ -172,9 +172,9 @@ export default function AuditPage() {
                   <span className="font-mono text-[11px] font-medium text-text-muted">{new Date(log.createdAt).toLocaleString("pt-BR")}</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 text-[12px] font-medium">
-                  <span className="text-text-secondary">ator: <b className="text-text-primary">{log.actorType}</b></span>
+                  <span className="text-text-secondary">Ator: <b className="text-text-primary">{log.actorType === "device" ? "Dispositivo" : log.actorType === "user" ? "Usuário" : log.actorType}</b></span>
                   <span className="text-text-muted">·</span>
-                  <span className="text-text-secondary">evento: <b className="text-text-primary">{log.eventType}</b></span>
+                  <span className="text-text-secondary">Evento: <b className="text-text-primary">{log.eventType}</b></span>
                 </div>
                 {log.metadata && typeof (log.metadata as Record<string, unknown>).entityType === "string" && (
                   <div className="mt-1 font-mono text-[11px] text-text-muted">

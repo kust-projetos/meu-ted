@@ -101,9 +101,10 @@ describe("ProfilePage", () => {
     expect(screen.getByText("Editar perfil")).toBeInTheDocument();
   });
 
-  it("does not render Assistente TED item (removed entry point)", () => {
+  it("does not render Assistente TED or Segurança placeholders", () => {
     render(<ProfilePage />);
     expect(screen.queryByText("Assistente TED")).not.toBeInTheDocument();
+    expect(screen.queryByText("Segurança")).not.toBeInTheDocument();
   });
 
   it("links to workspace management", async () => {

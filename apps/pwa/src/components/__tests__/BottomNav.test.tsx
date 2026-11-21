@@ -86,9 +86,10 @@ describe("BottomNav", () => {
       expect(fab).toHaveAttribute("aria-expanded", "true");
       expect(fab).toHaveAttribute("aria-controls", "quick-actions");
       expect(panel).toHaveAttribute("id", "quick-actions");
-      for (const label of ["Despesa", "Receita", "Transferência", "Ler Comprovante"]) {
+      for (const label of ["Despesa", "Receita", "Transferência"]) {
         expect(screen.getByText(label)).toBeInTheDocument();
       }
+      expect(screen.queryByText("Ler Comprovante")).not.toBeInTheDocument();
     });
 
     it("dispatches pwa:open-tx for Despesa/Receita/Transferência", async () => {
@@ -105,12 +106,12 @@ describe("BottomNav", () => {
       expect(screen.queryByRole("group", { name: "Ações de novo lançamento" })).not.toBeInTheDocument();
     });
 
-    it("navigates to /ted?from=comprovante for Ler Comprovante", async () => {
+    it("does not include Ler Comprovante in quick actions", async () => {
       const user = userEvent.setup();
       renderNav();
       await user.click(screen.getByLabelText("Novo lançamento"));
-      await user.click(screen.getByText("Ler Comprovante"));
-      expect(navigation.push).toHaveBeenCalledWith("/ted?from=comprovante");
+      expect(screen.queryByText("Ler Comprovante")).not.toBeInTheDocument();
+      expect(navigation.push).not.toHaveBeenCalled();
     });
 
     it("closes the disclosure on Escape and returns focus to the FAB", async () => {

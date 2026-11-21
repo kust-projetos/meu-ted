@@ -84,7 +84,7 @@ describe("NewTransactionSheet", () => {
     await selectOrigin(user, "Nubank");
     await user.click(screen.getByText("Transferência"));
     expect(screen.queryByRole("button", { name: "Selecionar categoria" })).not.toBeInTheDocument();
-    const transferAccount = screen.getAllByRole("button", { name: /^NUNubank$/ })[0];
+    const transferAccount = screen.getAllByRole("button", { name: /^Nubank$/ })[0];
     expect(transferAccount).toBeDefined();
     expect(transferAccount.className).not.toContain("bg-primary");
     expect(screen.getByText("Origem (saída)")).toBeInTheDocument();
