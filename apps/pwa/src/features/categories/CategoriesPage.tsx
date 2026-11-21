@@ -684,7 +684,7 @@ export default function CategoriesPage() {
   return (
     <div className="flex min-h-dvh flex-col bg-bg">
       <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+      <main className="flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
         <PageHeader
           title="Categorias"
           action={
@@ -706,7 +706,7 @@ export default function CategoriesPage() {
         <StaleBanner domains={["categories"]} />
 
         {/* Busca rápida - sticky para PWA */}
-        <div className="sticky top-0 z-10 -mt-1 bg-bg/80 px-5 py-3 backdrop-blur-md sm:px-8 lg:px-12">
+        <div className="sticky top-[calc(56px+env(safe-area-inset-top))] z-20 -mt-1 bg-bg/85 px-5 py-3 backdrop-blur-md sm:px-8 lg:px-12">
           <label className="relative flex items-center">
             <Search size={16} className="pointer-events-none absolute left-3.5 text-text-muted" />
             <input

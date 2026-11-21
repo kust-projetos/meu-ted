@@ -369,4 +369,20 @@ describe("WorkspaceSwitcher Component (Task 9)", () => {
       screen.getByRole("button", { name: /selecionar espaço/i }),
     ).toHaveTextContent("Minhas Finanças");
   });
+
+  it("supports left and right dropdown alignment and closes on Escape", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<WorkspaceSwitcher compact align="left" />);
+    await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+    const listboxLeft = screen.getByRole("listbox");
+    expect(listboxLeft.parentElement?.className).toContain("left-0");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    rerender(<WorkspaceSwitcher compact align="right" />);
+    await user.click(screen.getByRole("button", { name: /selecionar espaço/i }));
+    const listboxRight = screen.getByRole("listbox");
+    expect(listboxRight.parentElement?.className).toContain("right-0");
+  });
 });

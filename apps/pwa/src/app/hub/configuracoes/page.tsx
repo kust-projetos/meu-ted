@@ -32,11 +32,11 @@ const ENTRIES: ConfigEntry[] = [
 export default function HubConfiguracoes() {
   return (
     <AppShell>
-      <div className="flex min-h-dvh flex-col bg-bg pb-[var(--tab-bar-height)]">
+      <div className="flex min-h-dvh flex-col bg-bg pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
         <StatusBar />
-        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 py-4 sm:px-8 lg:px-12">
-          <PageHeader title="Configurações" subtitle="Conta, ambientes e auditoria." />
-          <div className="mt-4 flex flex-col gap-2.5">
+        <PageHeader title="Configurações" subtitle="Conta, ambientes e auditoria." />
+        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-5 pb-4 pt-2 sm:px-8 lg:px-12">
+          <div className="flex flex-col gap-2.5">
             {ENTRIES.map((entry) => (
               <Link
                 key={entry.href}

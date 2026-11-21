@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import Link from "next/link";
-import { User } from "lucide-react";
+import { AppFloatingMenu } from "./AppFloatingMenu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 export interface PageHeaderProps {
@@ -43,32 +42,29 @@ export function PageHeader({ title, subtitle, action, compactTitle }: PageHeader
           className="morph-bar transition-morph fixed inset-x-0 top-0 z-30 mx-auto w-full max-w-[var(--shell-max-w)] opacity-100"
         >
           <div
-            className="flex items-center justify-center px-5"
+            className="relative flex items-center justify-center px-14"
             style={{ height: "calc(56px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}
           >
             <span className="transition-morph translate-y-0 truncate text-[15px] font-extrabold tracking-tight text-text-primary opacity-100">
               {compactTitle ?? title}
             </span>
+            <div className="absolute right-4 flex items-center">
+              <AppFloatingMenu compact />
+            </div>
           </div>
         </div>
       )}
 
       {/* Rest state: transparent row + Large Title in flow */}
-      <div className="px-5 pb-2 pt-[calc(var(--page-pt)+env(safe-area-inset-top))] sm:px-8 lg:px-12">
+      <div className="relative z-30 px-5 pb-2 pt-[calc(var(--page-pt)+env(safe-area-inset-top))] sm:px-8 lg:px-12">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0 flex-none lg:hidden">
-            <WorkspaceSwitcher compact />
+            <WorkspaceSwitcher compact align="left" />
           </div>
           <div className="hidden min-w-0 flex-none lg:block" aria-hidden="true" />
           <div className="flex flex-none items-center gap-1.5">
             {action}
-            <Link
-              href="/perfil"
-              aria-label="Abrir perfil"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-2 text-text-secondary transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-            >
-              <User size={16} strokeWidth={2} />
-            </Link>
+            <AppFloatingMenu compact />
           </div>
         </div>
         <div

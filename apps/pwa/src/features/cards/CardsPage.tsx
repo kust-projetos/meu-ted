@@ -636,7 +636,7 @@ function PurchaseEditSheet({
   );
 }
 
-export default function CardsPage() {
+export default function CardsPage({ embedded = false }: { embedded?: boolean }) {
   const { accounts, transactions, categories, cardStatements, loading, error,
     addCard, payStatement, updateCard, writeError, clearWriteError, retryWriteError, refreshDomains } = useAppState();
   const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
@@ -717,8 +717,8 @@ export default function CardsPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 flex-col gap-4 px-5 py-6" aria-label="Carregando cartões">
           <Skeleton variant="card" height={190} />
           <Skeleton variant="card" height={96} />
@@ -772,23 +772,29 @@ export default function CardsPage() {
     };
   });
 
+  const totalSpentAllCards = cardsData.reduce((sum, c) => sum + c.spentCents, 0);
+  const totalLimitAllCards = cardsData.reduce((sum, c) => sum + c.creditLimitCents, 0);
+  const totalAvailAllCards = totalLimitAllCards - totalSpentAllCards;
+
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-0">
-        <PageHeader
-          title="Cartões"
-          action={
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
-            >
-              <Plus size={15} strokeWidth={2.4} />
-              Novo
-            </button>
-          }
-        />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && (
+          <PageHeader
+            title="Cartões"
+            action={
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Novo
+              </button>
+            }
+          />
+        )}
 
         {error && (
           <div className="mx-5 mb-3 flex items-center justify-between gap-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
@@ -802,72 +808,104 @@ export default function CardsPage() {
         <StaleBanner domains={["accounts", "cardStatements", "transactions"]} />
 
         {!selectedCardId ? (
-          <div className="grid gap-3 px-5 sm:px-8 lg:grid-cols-2 lg:px-12 xl:grid-cols-3">
-            {cardsData.length === 0 && (
-              <div className="py-[50px] text-center text-text-muted">
-                <div className="text-[14px] font-semibold">Nenhum cartão</div>
-                <div className="mt-1 text-[12px]">Adicione um cartão para começar.</div>
-              </div>
-            )}
-            {cardsData.map((card) => {
-              const preset = resolveBankPreset({ name: card.name, color: card.color });
-              const availCents = card.creditLimitCents - card.spentCents;
-              const masked = formatMaskedNumber(getLastFour(card.id));
-              return (
-                <button
-                  type="button"
-                  key={card.id}
-                  aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`}
-                  onClick={() => setSelectedCardId(card.id)}
-                  className="flex w-full max-w-[440px] cursor-pointer flex-col overflow-hidden rounded-[20px] border border-border-subtle bg-surface-1 text-left shadow-card transition-all hover:border-border-medium active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-                >
-                  <BankCard
-                    bankId={card.institution?.id ?? preset.id}
-                    product={card.product}
-                    cardName={card.name}
-                    maskedNumber={masked}
-                    network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
-                    compact
-                    className="rounded-none shadow-none"
-                  />
-                  <div className="border-t border-border-subtle p-3.5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-semibold text-text-muted">Fatura atual</div>
-                        <div className="font-mono tabular-nums text-[20px] font-bold leading-tight text-text-primary">
-                          {formatBRL(card.spentCents)}
-                        </div>
-                      </div>
-                      <div className="min-w-0 text-right">
-                        <div className="font-mono tabular-nums text-[12px] font-bold text-primary">
-                          Disponível {formatBRL(availCents)}
-                        </div>
-                        <div className="mt-0.5 truncate text-[11px] font-medium text-text-muted">
-                          Fecha dia {card.closingDay} · vence dia {card.dueDay}
-                        </div>
-                      </div>
-                    </div>
-                    <div
-                      role="progressbar"
-                      aria-label={`Uso do limite: ${formatPct(card.pct)}`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={card.pct}
-                      className="mt-2.5 h-[6px] overflow-hidden rounded-full bg-surface-2"
-                    >
-                      <div className="h-full rounded-full transition-all duration-300" style={{ width: `${card.pct}%`, background: preset.gradient }} />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-text-muted">
-                      <span className="font-mono tabular-nums">Limite total {formatBRL(card.creditLimitCents)}</span>
-                      <span className="shrink-0 whitespace-nowrap font-bold" style={{ color: preset.primaryColor }}>
-                        {preset.name}
-                      </span>
-                    </div>
+          <>
+            <div className="px-5 sm:px-8 lg:px-12">
+              <div
+                className="mb-4 flex items-center justify-between gap-3 overflow-hidden rounded-[20px] px-5 py-4 text-white shadow-card"
+                style={{ background: "linear-gradient(165deg, #0F6B45, #0A3A28)" }}
+              >
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-white/70">Total em faturas</div>
+                  <div className="font-mono tabular-nums text-[24px] font-bold tracking-tight text-white">
+                    {formatBRL(totalSpentAllCards)}
                   </div>
-                </button>
-              );
-            })}
-          </div>
+                  <div className="text-[11px] font-medium text-white/70">
+                    {cardsData.length} {cardsData.length === 1 ? "cartão" : "cartões"} · disponível {formatBRL(totalAvailAllCards)}
+                  </div>
+                </div>
+                {embedded && (
+                  <button
+                    type="button"
+                    onClick={() => setCreateOpen(true)}
+                    className="flex flex-none items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[12px] font-bold text-[#0A3A28] shadow-sm transition-all hover:bg-white/90 active:scale-95"
+                  >
+                    <Plus size={15} strokeWidth={2.4} />
+                    Novo
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid gap-3 px-5 sm:px-8 lg:grid-cols-2 lg:px-12 xl:grid-cols-3">
+              {cardsData.length === 0 && (
+                <div className="py-[50px] text-center text-text-muted">
+                  <div className="text-[14px] font-semibold">Nenhum cartão</div>
+                  <div className="mt-1 text-[12px]">Adicione um cartão para começar.</div>
+                </div>
+              )}
+              {cardsData.map((card) => {
+                const availCents = card.creditLimitCents - card.spentCents;
+                const masked = formatMaskedNumber(getLastFour(card.id));
+                const barAccent = card.product?.colors.accent ?? card.institution?.colors.primary ?? "var(--color-primary)";
+                const brandLabel = card.institution?.name;
+                return (
+                  <button
+                    type="button"
+                    key={card.id}
+                    aria-label={`${card.name}, fatura ${formatBRL(card.spentCents)}, limite ${formatBRL(card.creditLimitCents)}`}
+                    onClick={() => setSelectedCardId(card.id)}
+                    className="flex w-full max-w-[440px] cursor-pointer flex-col overflow-hidden rounded-[20px] border border-border-subtle bg-surface-1 text-left shadow-card transition-all hover:border-border-medium active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
+                  >
+                    <BankCard
+                      bankId={card.institution?.id ?? card.name}
+                      product={card.product}
+                      cardName={card.name}
+                      maskedNumber={masked}
+                      network={card.product?.network === "unknown" ? undefined : card.product?.network}
+                      compact
+                      className="rounded-none shadow-none"
+                    />
+                    <div className="border-t border-border-subtle p-3.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-text-muted">Fatura atual</div>
+                          <div className="font-mono tabular-nums text-[20px] font-bold leading-tight text-text-primary">
+                            {formatBRL(card.spentCents)}
+                          </div>
+                        </div>
+                        <div className="min-w-0 text-right">
+                          <div className="font-mono tabular-nums text-[12px] font-bold text-primary">
+                            Disponível {formatBRL(availCents)}
+                          </div>
+                          <div className="mt-0.5 truncate text-[11px] font-medium text-text-muted">
+                            Fecha dia {card.closingDay} · vence dia {card.dueDay}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        role="progressbar"
+                        aria-label={`Uso do limite: ${formatPct(card.pct)}`}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={card.pct}
+                        className="mt-2.5 h-[6px] overflow-hidden rounded-full bg-surface-2"
+                      >
+                        <div className="h-full rounded-full transition-all duration-300" style={{ width: `${card.pct}%`, background: barAccent }} />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] font-semibold text-text-muted">
+                        <span className="font-mono tabular-nums">Limite total {formatBRL(card.creditLimitCents)}</span>
+                        {brandLabel && (
+                          <span className="shrink-0 whitespace-nowrap font-bold text-text-secondary">
+                            {brandLabel}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
         ) : (
           (() => {
             const card = cardsData.find((c) => c.id === selectedCardId);
@@ -887,7 +925,6 @@ export default function CardsPage() {
             const detailDueDay = selectedStmtSummary
               ? new Date(`${selectedStmtSummary.dueDate}T12:00:00`).getDate()
               : card.dueDay;
-            const preset = resolveBankPreset({ name: card.name, color: card.color });
             // ADR-018: "Limite livre" is limit − total outstanding (authoritative
             // card.balanceCents when canonical), not limit − selected statement.
             const rawCard = creditCards.find((a) => a.id === card.id);
@@ -916,11 +953,11 @@ export default function CardsPage() {
                 {/* Cartão e dados da fatura em uma única superfície */}
                 <div className="overflow-hidden rounded-[20px] border border-border-subtle bg-surface-1 shadow-card lg:max-w-[440px]">
                   <BankCard
-                    bankId={card.institution?.id ?? preset.id}
+                    bankId={card.institution?.id ?? card.name}
                     product={card.product}
                     cardName={card.name}
                     maskedNumber={masked}
-                    network={card.product?.network === "unknown" ? undefined : card.product?.network ?? preset.network}
+                    network={card.product?.network === "unknown" ? undefined : card.product?.network}
                     compact
                     className="rounded-none shadow-none"
                   />

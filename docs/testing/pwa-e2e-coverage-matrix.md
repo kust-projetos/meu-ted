@@ -29,9 +29,9 @@ Every ID is atomic: one visible action, required state, expected UI/API effect, 
 | NAV-02 | BottomNav | M,D | Extrato → `/registros` client navigation | no chunk/CSP error | navigation |
 | NAV-03 | BottomNav | M,D | Cartões → `/hub/patrimonio?aba=cartoes` | canonical tab retained | navigation |
 | NAV-04 | BottomNav | M,D | Relatórios → `/hub/relatorios` | canonical route loaded | navigation |
-| NAV-05 | BottomNav FAB | M | open quick action disclosure | four actions visible | navigation |
+| NAV-05 | BottomNav FAB | M | open quick action disclosure | three actions visible | navigation |
 | NAV-06 | Quick actions | M | Despesa opens preselected sheet | expense sheet visible | navigation |
-| NAV-07 | Quick actions | M | Ler Comprovante launches capture flow | expense sheet and canonical URL | navigation |
+| NAV-07 | Quick actions | M | Omitted Ler Comprovante; Receita opens income sheet | Nova receita sheet visible | navigation |
 | NAV-08 | Quick actions | M | Transferência opens transfer sheet | transfer sheet visible | navigation |
 | NAV-09 | Explorar | M | Cartões → `/hub/patrimonio?aba=cartoes` | canonical tab retained | navigation |
 | NAV-10 | Explorar | M | Planejamento → `/hub/planejamento` | canonical route loaded | navigation |

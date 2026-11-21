@@ -52,11 +52,12 @@ describe("TedChatLauncher Component (page navigation)", () => {
   it("renders floating launcher button and navigates to /ted when clicked", async () => {
     const user = userEvent.setup();
 
-    render(<TedChatLauncher />);
+    const { container } = render(<TedChatLauncher />);
 
     const launcher = screen.getByRole("button", { name: /abrir assistente ted/i });
     expect(launcher).toBeInTheDocument();
-    expect(screen.getByTestId("ted-launcher-label")).toHaveTextContent("TED");
+    expect(screen.queryByTestId("ted-launcher-label")).not.toBeInTheDocument();
+    expect(container.querySelector('img[src*="ted-launcher.png"]')).toBeInTheDocument();
     expect(launcher).not.toHaveAttribute("aria-haspopup");
     expect(launcher).not.toHaveAttribute("aria-expanded");
 

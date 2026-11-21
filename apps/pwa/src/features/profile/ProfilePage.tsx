@@ -15,7 +15,7 @@ import { ApiError } from "@/lib/api/client";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import { useTheme } from "@/lib/theme/use-theme";
 import { useEffectiveProfile } from "./hooks";
-import { Sun, Moon, Laptop, LogOut, ChevronRight, ChevronLeft, User, Bell, Shield, FolderOpen } from "lucide-react";
+import { Sun, Moon, Laptop, LogOut, ChevronRight, ChevronLeft, User, Bell, FolderOpen } from "lucide-react";
 
 export { AgentTranscript } from "./AgentTranscript";
 
@@ -97,7 +97,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg pb-[var(--tab-bar-height)]">
+    <div className="flex min-h-dvh flex-col bg-bg pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8">
       <StatusBar />
       <PageHeader title="Perfil" />
 
@@ -180,18 +180,6 @@ export default function ProfilePage() {
               <ChevronRight size={16} className="text-text-muted" />
             </button>
           ))}
-        </div>
-
-        <div className="rounded-[18px] border border-border-subtle bg-surface-1 px-4 py-1 opacity-50 shadow-card">
-          <div className="flex w-full items-center gap-3 py-3.5">
-            <Shield size={18} className="text-text-muted" />
-            <span className="flex-1 text-left text-[14px] font-semibold text-text-muted">
-              Segurança
-            </span>
-            <span className="rounded-full bg-surface-2 px-2.5 py-0.5 text-[10px] font-bold text-text-muted">
-              Em breve
-            </span>
-          </div>
         </div>
 
         {logoutError && (

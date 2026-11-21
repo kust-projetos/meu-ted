@@ -426,7 +426,7 @@ function SubscriptionDetailSheet({
   );
 }
 
-export default function SubscriptionsPage() {
+export default function SubscriptionsPage({ embedded = false }: { embedded?: boolean }) {
   const {
     subscriptions,
     addSubscription,
@@ -458,28 +458,32 @@ export default function SubscriptionsPage() {
   const monthlyTotal = subscriptions
     .filter((s) => s.status === "active")
     .reduce((s, sub) => {
-      return s + (sub.cycle === "yearly" ? sub.amountCents / 12 : sub.amountCents);
+      if (sub.cycle === "yearly") return s + sub.amountCents / 12;
+      if (sub.cycle === "weekly") return s + sub.amountCents * 4.33;
+      return s + sub.amountCents;
     }, 0);
 
   const displayed = tab === "active" ? active : cancelled;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
-        <PageHeader
-          title="Assinaturas"
-          action={
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
-            >
-              <Plus size={15} strokeWidth={2.4} />
-              Nova
-            </button>
-          }
-        />
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && (
+          <PageHeader
+            title="Assinaturas"
+            action={
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-[12px] font-bold text-white shadow-sm hover:bg-primary-hover active:scale-95 transition-all"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            }
+          />
+        )}
 
         <WriteErrorBanner message={writeError} onDismiss={clearWriteError} onRetry={retryWriteError ?? undefined} />
 
@@ -488,18 +492,30 @@ export default function SubscriptionsPage() {
         <div className="px-5 sm:px-8 lg:px-12">
           {/* Monthly total hero */}
           <div
-            className="mb-4 overflow-hidden rounded-[20px] px-5 py-5 text-white shadow-card"
+            className="mb-4 flex items-center justify-between gap-3 overflow-hidden rounded-[20px] px-5 py-5 text-white shadow-card"
             style={{ background: "linear-gradient(165deg, #0F6B45, #0A3A28)" }}
           >
-            <div className="mb-1 text-[11px] font-medium text-white/70">
-              Custo mensal recorrente
+            <div>
+              <div className="mb-1 text-[11px] font-medium text-white/70">
+                Custo mensal recorrente
+              </div>
+              <div className="mb-1 font-mono tabular-nums text-[28px] font-bold tracking-tight text-white">
+                {formatBRL(Math.round(monthlyTotal))}
+              </div>
+              <div className="text-[11px] font-medium text-white/70">
+                {active.length} ativa{active.length !== 1 ? "s" : ""}
+              </div>
             </div>
-            <div className="mb-1 font-mono tabular-nums text-[28px] font-bold tracking-tight text-white">
-              {formatBRL(Math.round(monthlyTotal))}
-            </div>
-            <div className="text-[11px] font-medium text-white/70">
-              {active.length} ativa{active.length !== 1 ? "s" : ""}
-            </div>
+            {embedded && (
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="flex flex-none items-center gap-1.5 rounded-full bg-white px-4 py-2 text-[12px] font-bold text-[#0A3A28] shadow-sm transition-all hover:bg-white/90 active:scale-95"
+              >
+                <Plus size={15} strokeWidth={2.4} />
+                Nova
+              </button>
+            )}
           </div>
 
           {/* Tabs */}
@@ -540,7 +556,7 @@ export default function SubscriptionsPage() {
                         {sub.name}
                       </div>
                       <div className="text-[11px] font-medium text-text-muted">
-                        {sub.cycle === "monthly" ? "Mensal" : "Anual"} · dia {sub.day}
+                        {sub.cycle === "monthly" ? "Mensal" : sub.cycle === "weekly" ? "Semanal" : "Anual"} · dia {sub.day}
                       </div>
                     </div>
                     <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">

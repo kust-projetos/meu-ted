@@ -87,7 +87,7 @@ describe("CardsPage", () => {
       await user.click(institution);
       await user.clear(institution);
       await user.type(institution, "Itaú");
-      await user.click(await screen.findByText("Itaú Unibanco"));
+      await user.click(await screen.findByText("Itaú"));
       const model = screen.getByRole("combobox", { name: "Modelo do cartão" });
       expect(model).toHaveTextContent("Itaú Click");
       expect(model).toHaveTextContent("Personnalité");
@@ -540,7 +540,7 @@ describe("CardsPage", () => {
       await user.click(institution);
       await user.clear(institution);
       await user.type(institution, "Itaú");
-      await user.click(await screen.findByText("Itaú Unibanco"));
+      await user.click(await screen.findByText("Itaú"));
       await user.clear(screen.getByPlaceholderText(/Nubank, It/i));
       await user.type(screen.getByPlaceholderText(/Nubank, It/i), "Meu Cartao");
       const [closing, due] = screen.getAllByRole("spinbutton");

@@ -18,6 +18,9 @@
 export const ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY =
   "pi-finance:active-workspace-preference";
 
+export const PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY =
+  "pi-finance:primary-workspace-preference";
+
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -42,17 +45,13 @@ function isWorkspaceId(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value.trim());
 }
 
-/**
- * Read the stored workspace id, but ONLY when it is bound to
- * `currentPrincipalId`. Returns null when absent, corrupt, bound to another
- * principal, or not a UUID (fail-closed).
- */
-export function readActiveWorkspacePreference(
+function readBoundPreference(
+  storageKey: string,
   currentPrincipalId: string | null | undefined,
 ): string | null {
   if (!isPrincipalId(currentPrincipalId)) return null;
   try {
-    const raw = getStorage()?.getItem(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY);
+    const raw = getStorage()?.getItem(storageKey);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
@@ -64,6 +63,40 @@ export function readActiveWorkspacePreference(
   }
 }
 
+function writeBoundPreference(
+  storageKey: string,
+  principalId: string,
+  workspaceId: string,
+): boolean {
+  if (!isPrincipalId(principalId) || !isWorkspaceId(workspaceId)) return false;
+  try {
+    const stored: StoredPreference = { principalId, workspaceId };
+    getStorage()?.setItem(storageKey, JSON.stringify(stored));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearBoundPreference(storageKey: string): void {
+  try {
+    getStorage()?.removeItem(storageKey);
+  } catch {
+    /* noop */
+  }
+}
+
+/**
+ * Read the stored workspace id, but ONLY when it is bound to
+ * `currentPrincipalId`. Returns null when absent, corrupt, bound to another
+ * principal, or not a UUID (fail-closed).
+ */
+export function readActiveWorkspacePreference(
+  currentPrincipalId: string | null | undefined,
+): string | null {
+  return readBoundPreference(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY, currentPrincipalId);
+}
+
 /**
  * Persist the active workspace for `principalId`. Fail-closed: refuses
  * empty principals and non-UUID workspace ids without writing.
@@ -72,24 +105,34 @@ export function writeActiveWorkspacePreference(
   principalId: string,
   workspaceId: string,
 ): boolean {
-  if (!isPrincipalId(principalId) || !isWorkspaceId(workspaceId)) return false;
-  try {
-    const stored: StoredPreference = { principalId, workspaceId };
-    getStorage()?.setItem(
-      ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY,
-      JSON.stringify(stored),
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return writeBoundPreference(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY, principalId, workspaceId);
 }
 
 /** Remove the stored preference (logout / revocation / no workspace). */
 export function clearActiveWorkspacePreference(): void {
-  try {
-    getStorage()?.removeItem(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY);
-  } catch {
-    /* noop */
-  }
+  clearBoundPreference(ACTIVE_WORKSPACE_PREFERENCE_STORAGE_KEY);
+}
+
+/**
+ * Read the stored primary workspace id for `currentPrincipalId` (fail-closed).
+ */
+export function readPrimaryWorkspacePreference(
+  currentPrincipalId: string | null | undefined,
+): string | null {
+  return readBoundPreference(PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY, currentPrincipalId);
+}
+
+/**
+ * Persist the user's explicit primary workspace for `principalId` (fail-closed).
+ */
+export function writePrimaryWorkspacePreference(
+  principalId: string,
+  workspaceId: string,
+): boolean {
+  return writeBoundPreference(PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY, principalId, workspaceId);
+}
+
+/** Remove the stored primary workspace preference. */
+export function clearPrimaryWorkspacePreference(): void {
+  clearBoundPreference(PRIMARY_WORKSPACE_PREFERENCE_STORAGE_KEY);
 }

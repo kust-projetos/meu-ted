@@ -42,13 +42,18 @@ describe("institution identity", () => {
   });
 
   it("keeps vendored institution logo paths and inline SVG map keys in sync", () => {
-    for (const institution of INSTITUTIONS) {
-      if (institution.logoSrc) expect(institutionSvg).toHaveProperty(institution.logoSrc);
+    const catalogLogos = new Set(INSTITUTIONS.map((entry) => entry.logoSrc).filter(Boolean));
+    for (const key of Object.keys(institutionSvg)) {
+      expect(catalogLogos.has(key)).toBe(true);
     }
     for (const id of ["nubank", "mercado-pago", "pagseguro", "wise"]) {
       const institution = INSTITUTIONS.find((entry) => entry.id === id);
       expect(institution?.logoSrc).toBeDefined();
       expect(institutionSvg).toHaveProperty(institution!.logoSrc!);
+    }
+    for (const id of ["itau", "bradesco", "santander", "banco-do-brasil", "caixa", "inter", "c6-bank", "xp"]) {
+      const institution = INSTITUTIONS.find((entry) => entry.id === id);
+      expect(institution?.logoSrc).toBe(`/brands/institutions/${id}.svg`);
     }
   });
 
@@ -61,16 +66,18 @@ describe("institution identity", () => {
     clearWorkspaceAppearance("one");
   });
 
-  it("uses two-character monograms and has a neutral mark without institution", () => {
-    render(
+  it("renders official logo images, two-character monograms, and neutral fallback", () => {
+    const { container } = render(
       <>
-        <InstitutionMark institution={searchInstitutions("neon")[0]} />
-        <InstitutionMark institution={searchInstitutions("bradesco")[0]} />
+        <InstitutionMark institution={searchInstitutions("itau")[0]} />
+        <InstitutionMark institution={searchInstitutions("avenue")[0]} />
+        <InstitutionMark institution={searchInstitutions("cooperforte")[0]} />
         <InstitutionMark />
       </>,
     );
-    expect(screen.getByRole("img", { name: "Neon" })).toHaveTextContent("NE");
-    expect(screen.getByRole("img", { name: "Bradesco" })).toHaveTextContent("BR");
+    expect(container.querySelector('img[src="/brands/institutions/itau.svg"]')).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Avenue" })).toHaveTextContent("AV");
+    expect(screen.getByRole("img", { name: "Cooperforte" })).toHaveTextContent("CO");
     expect(screen.getByRole("img", { name: "Instituição" })).toBeInTheDocument();
   });
 
@@ -129,7 +136,7 @@ describe("institution identity", () => {
       />,
     );
     const input = screen.getByRole("combobox");
-    expect(input).toHaveValue("Banco Inter");
+    expect(input).toHaveValue("Inter");
     rerender(
       <InstitutionPicker
         value={INSTITUTIONS.find((institution) => institution.id === "caixa")}
@@ -137,6 +144,6 @@ describe("institution identity", () => {
         onManual={onManual}
       />,
     );
-    expect(screen.getByRole("combobox")).toHaveValue("Caixa Econômica Federal");
+    expect(screen.getByRole("combobox")).toHaveValue("Caixa");
   });
 });

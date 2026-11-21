@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import PageHeader from "@/components/PageHeader";
 import StatusBar from "@/components/StatusBar";
 import Badge from "@/components/ui/Badge";
 import { WriteErrorBanner } from "@/components/WriteErrorBanner";
 import { StaleBanner } from "@/components/StaleBanner";
+import { InstitutionMark } from "@/components/brand/InstitutionMark";
+import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
+import { resolveAccountPresentation, useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { normalize } from "@/lib/institutions/catalog";
 import { useAppState } from "@/lib/state/app-state-context";
-import { Plus } from "lucide-react";
-import { resolveBankPreset } from "@/lib/bank-presets";
+import { Plus, Wallet } from "lucide-react";
 import { resolveCardOutstanding } from "@/lib/cards/card-debt";
 import { routePatrimonio, routePlanejamento } from "@/lib/routes";
 
@@ -26,6 +30,8 @@ function accountKindLabel(kind: string): string {
       return "Poupança";
     case "investment":
       return "Investimento";
+    case "cash":
+      return "Dinheiro";
     case "credit_card":
       return "Cartão";
     default:
@@ -39,13 +45,17 @@ function cardBarColor(pct: number): string {
   return "var(--color-primary)";
 }
 
-export default function WalletPage() {
+export default function WalletPage({ embedded = false }: { embedded?: boolean }) {
   const { accounts, goals, debts, cardStatements, loading, error, writeError, clearWriteError, retryWriteError } = useAppState();
+  const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
+  const appearance = useAccountAppearance(workspaceId);
+  const appearanceFor = (accountId: string, accountName: string) =>
+    appearance.map[accountId] ?? Object.entries(appearance.map).find(([key]) => normalize(key) === normalize(accountName))?.[1];
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh flex-col bg-bg">
-        <StatusBar />
+      <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+        {!embedded && <StatusBar />}
         <div className="flex flex-1 items-center justify-center">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-border-subtle border-t-primary" />
@@ -88,9 +98,11 @@ export default function WalletPage() {
   const netWorth = ativos - passivos;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
-      <StatusBar />
-      <main className="flex flex-1 flex-col pb-[var(--tab-bar-height)]">
+    <div className={embedded ? "flex flex-1 flex-col bg-bg" : "flex min-h-dvh flex-col bg-bg"}>
+      {!embedded && <StatusBar />}
+      <main className={embedded ? "flex flex-1 flex-col pt-4" : "flex flex-1 flex-col pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-8"}>
+        {!embedded && <PageHeader title="Patrimônio" />}
+
         {error && (
           <div className="mx-5 mt-2 mb-3 rounded-[12px] bg-danger-tint px-4 py-2.5 text-[12px] font-semibold text-danger">
             ⚠ {error}
@@ -102,14 +114,14 @@ export default function WalletPage() {
         <StaleBanner domains={["accounts", "goals", "cardStatements"]} />
 
         {/* Hero Titanium */}
-        <div
-          className="px-5 pt-3 pb-6 text-white sm:px-8 lg:px-12"
-          style={{ background: "linear-gradient(165deg, #0F6B45, #0A3A28)" }}
-        >
-          <div className="my-4 text-[22px] font-bold tracking-tight text-white">Patrimônio</div>
-          <div className="mb-1 text-[11px] font-medium text-white/70">
-            Patrimônio líquido
-          </div>
+        <div className="px-5 sm:px-8 lg:px-12">
+          <div
+            className="rounded-[20px] px-5 py-5 text-white shadow-card"
+            style={{ background: "linear-gradient(165deg, #0F6B45, #0A3A28)" }}
+          >
+            <div className="mb-1 text-[11px] font-medium text-white/70">
+              Patrimônio líquido
+            </div>
           <div
             className="mb-4 font-mono tabular-nums text-[36px] sm:text-[42px] font-bold text-white tracking-tight"
             style={{ letterSpacing: "-0.02em" }}
@@ -163,6 +175,7 @@ export default function WalletPage() {
             </div>
           </div>
         </div>
+        </div>
 
         {/* Content sections */}
         <div className="pt-4 px-5 pb-6 sm:px-8 lg:px-12">
@@ -181,31 +194,43 @@ export default function WalletPage() {
 
           <div className="mb-5 flex flex-col gap-2.5">
             {checkingAccounts.map((acc) => {
-              const preset = resolveBankPreset({ name: acc.name, color: acc.color });
+              const { institution } = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name));
+              const accentColor = institution?.colors.primary;
               return (
                 <Link
                   key={acc.id}
                   href={routePatrimonio("contas", { accountId: acc.id })}
-                  data-bank={preset.id}
-                  className="relative flex cursor-pointer items-center gap-3 overflow-hidden rounded-[16px] border bg-surface-1 px-3.5 py-3 shadow-card hover:bg-surface-2/60 transition-colors"
-                  style={{ borderColor: `${preset.primaryColor}22`, background: `linear-gradient(90deg, ${preset.primaryColor}0F, transparent 50%), var(--surface-1)` }}
+                  data-bank={institution?.id ?? "custom"}
+                  className="relative flex cursor-pointer items-center gap-3 overflow-hidden rounded-[16px] border border-border-subtle bg-surface-1 px-3.5 py-3 shadow-card hover:bg-surface-2/60 transition-colors"
+                  style={
+                    accentColor
+                      ? {
+                          borderColor: `${accentColor}26`,
+                          background: `linear-gradient(90deg, ${accentColor}0F, transparent 50%), var(--surface-1)`,
+                        }
+                      : undefined
+                  }
                 >
-                  <span className="absolute left-0 top-0 h-full w-[4px]" style={{ background: preset.gradient }} aria-hidden="true" />
-                  <span
-                    className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[11px] font-black text-white shadow-sm"
-                    style={{ background: preset.gradient, color: preset.textColor }}
-                    aria-hidden="true"
-                  >
-                    {preset.shortName.slice(0, 2).toUpperCase()}
-                  </span>
+                  <span className="absolute left-0 top-0 h-full w-[4px]" style={{ background: accentColor ?? "var(--color-border-medium)" }} aria-hidden="true" />
+                  {acc.kind === "cash" && !institution ? (
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-text-secondary" aria-hidden="true">
+                      <Wallet size={18} strokeWidth={2} />
+                    </span>
+                  ) : (
+                    <InstitutionMark institution={institution} size="md" />
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="truncate text-[14px] font-bold text-text-primary">
                       {acc.name}
                     </div>
                     <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
                       <span>{accountKindLabel(acc.kind)}</span>
-                      <span className="h-1 w-1 rounded-full bg-border-subtle" />
-                      <span style={{ color: preset.primaryColor }}>{preset.name}</span>
+                      {institution && (
+                        <>
+                          <span className="h-1 w-1 rounded-full bg-border-subtle" />
+                          <span className="font-semibold text-text-secondary">{institution.name}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="font-mono tabular-nums text-[14px] font-bold text-text-primary">
@@ -246,32 +271,31 @@ export default function WalletPage() {
                       100,
                     )
                   : 0;
-              const preset = resolveBankPreset({ name: card.name, color: (card as { color?: string }).color });
+              const { institution } = resolveAccountPresentation(card, appearanceFor(card.id, card.name));
+              const accentColor = institution?.colors.primary;
               return (
                 <Link
                   key={card.id}
                   href={routePatrimonio("cartoes", { cardId: card.id })}
-                  data-bank={preset.id}
-                  className="relative cursor-pointer overflow-hidden rounded-[16px] border bg-surface-1 px-3.5 py-3 shadow-card hover:bg-surface-2/60 transition-colors"
-                  style={{ borderColor: `${preset.primaryColor}22` }}
+                  data-bank={institution?.id ?? "custom"}
+                  className="relative cursor-pointer overflow-hidden rounded-[16px] border border-border-subtle bg-surface-1 px-3.5 py-3 shadow-card hover:bg-surface-2/60 transition-colors"
+                  style={accentColor ? { borderColor: `${accentColor}26` } : undefined}
                 >
-                  <span className="absolute left-0 top-0 h-full w-[4px]" style={{ background: preset.gradient }} aria-hidden="true" />
+                  <span className="absolute left-0 top-0 h-full w-[4px]" style={{ background: accentColor ?? "var(--color-border-medium)" }} aria-hidden="true" />
                   <div className="mb-2.5 flex items-center gap-3">
-                    <span
-                      className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[11px] font-black text-white shadow-sm"
-                      style={{ background: preset.gradient, color: preset.textColor }}
-                      aria-hidden="true"
-                    >
-                      {preset.shortName.slice(0, 2).toUpperCase()}
-                    </span>
+                    <InstitutionMark institution={institution} size="md" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate text-[14px] font-bold text-text-primary">
                         {card.name}
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
                         <span>Vence dia {card.dueDay}</span>
-                        <span className="h-1 w-1 rounded-full bg-border-subtle" />
-                        <span style={{ color: preset.primaryColor }}>{preset.name}</span>
+                        {institution && (
+                          <>
+                            <span className="h-1 w-1 rounded-full bg-border-subtle" />
+                            <span className="font-semibold text-text-secondary">{institution.name}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">

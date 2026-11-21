@@ -311,76 +311,69 @@ export default function RecordsPage() {
           />
         )}
 
-        {/* Search with persistent label & direct clear */}
-        <div className="mx-5 mb-2.5 sm:mx-8 lg:mx-12">
-          <label
-            htmlFor="records-search-input"
-            className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-text-muted"
-          >
-            Buscar lançamento
-          </label>
-          <div className="flex items-center gap-2.5 rounded-[14px] border border-border-subtle bg-surface-1 px-3.5 py-2.5 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all">
-            <Search size={16} className="text-text-muted flex-none" />
-            <input
-              id="records-search-input"
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar lançamento por descrição ou destinatário"
-              className="w-full border-none bg-transparent text-[13px] font-medium text-text-primary placeholder:text-text-muted outline-none"
-            />
-            {search.trim() !== "" && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                aria-label="Limpar busca"
-                className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted hover:text-text-primary"
-              >
-                <X size={13} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Compact filter trigger + direct active filter removal pills */}
+        {/* Search + compact filter trigger */}
         <div className="mx-5 mb-3 flex flex-col gap-2 sm:mx-8 lg:mx-12">
-          <button
-            data-testid="filter-trigger"
-            onClick={() => setFilterOpen(true)}
-            className="flex w-full items-center gap-2 rounded-[14px] border border-border-subtle bg-surface-1 px-3.5 py-2.5 text-left text-[13px] font-semibold text-text-primary shadow-sm hover:bg-surface-2 transition-colors"
-          >
-            <SlidersHorizontal size={15} className="text-text-muted flex-none" />
-            <span>Filtro</span>
-            {typeFilter !== "all" && (
-              <span className="ml-auto rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-bold text-white shadow-xs">
-                {chips.find((c) => c.key === typeFilter)?.label}
-              </span>
-            )}
-            {periodFilter !== "all" && periodFilter !== "custom" && (
-              <span className="rounded-full bg-surface-2 border border-border-subtle px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-                {periodFilter === "today"
-                  ? "Hoje"
-                  : periodFilter === "month"
-                    ? "Este mês"
-                    : `${periodFilter}d`}
-              </span>
-            )}
-            {periodFilter === "custom" && (customStartDate || customEndDate) && (
-              <span className="rounded-full bg-surface-2 border border-border-subtle px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-                Personalizado
-              </span>
-            )}
-            {accountFilter && (
-              <span className="rounded-full bg-surface-2 border border-border-subtle px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-                {accounts.find((a) => a.id === accountFilter)?.name}
-              </span>
-            )}
-            {categoryFilter && (
-              <span className="rounded-full bg-surface-2 border border-border-subtle px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-                {categories.find((c) => c.id === categoryFilter)?.name}
-              </span>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex flex-1 items-center gap-2.5 rounded-[14px] border border-border-subtle bg-surface-1 px-3.5 py-2.5 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 transition-all">
+              <Search size={16} className="text-text-muted flex-none" />
+              <label htmlFor="records-search-input" className="sr-only">
+                Buscar lançamento
+              </label>
+              <input
+                id="records-search-input"
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar lançamento ou destinatário..."
+                className="w-full border-none bg-transparent text-[13px] font-medium text-text-primary placeholder:text-text-muted outline-none"
+              />
+              {search.trim() !== "" && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="Limpar busca"
+                  className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-surface-2 text-text-muted hover:text-text-primary"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            {(() => {
+              const activeCount =
+                Number(typeFilter !== "all") +
+                Number(periodFilter !== "all") +
+                Number(accountFilter !== null) +
+                Number(categoryFilter !== null);
+              const activeLabels = [
+                typeFilter !== "all" ? chips.find((c) => c.key === typeFilter)?.label : null,
+                accountFilter ? accounts.find((a) => a.id === accountFilter)?.name : null,
+                categoryFilter ? categories.find((c) => c.id === categoryFilter)?.name : null,
+              ]
+                .filter(Boolean)
+                .join(" ");
+              return (
+                <button
+                  type="button"
+                  data-testid="filter-trigger"
+                  onClick={() => setFilterOpen(true)}
+                  className={`flex h-11 flex-none items-center gap-1.5 rounded-[14px] border px-3.5 text-[13px] font-semibold shadow-sm transition-colors ${
+                    activeCount > 0
+                      ? "border-primary/40 bg-primary-tint/40 text-primary"
+                      : "border-border-subtle bg-surface-1 text-text-primary hover:bg-surface-2"
+                  }`}
+                >
+                  <SlidersHorizontal size={15} className="flex-none" />
+                  <span>Filtro</span>
+                  {activeCount > 0 && (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-white">
+                      {activeCount}
+                    </span>
+                  )}
+                  {activeLabels && <span className="sr-only">{activeLabels}</span>}
+                </button>
+              );
+            })()}
+          </div>
 
           {(typeFilter !== "all" ||
             periodFilter !== "all" ||
@@ -578,9 +571,7 @@ export default function RecordsPage() {
 
           <button
             onClick={() => {
-              setTypeFilter("all");
-              setPeriodFilter("all");
-              setCategoryFilter(null);
+              clearAllFilters();
               setFilterOpen(false);
             }}
             className="mt-2 w-full rounded-[14px] border border-border-subtle bg-surface-2 py-3 text-[13px] font-bold text-text-secondary hover:bg-surface-3 transition-colors"

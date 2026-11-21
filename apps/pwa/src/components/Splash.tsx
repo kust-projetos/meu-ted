@@ -18,36 +18,15 @@ export function Splash() {
       }}
       aria-label="Carregando Meu Ted"
     >
-      <svg
-        width={72}
-        height={72}
-        viewBox="0 0 64 64"
-        role="img"
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/brand/ted-launcher.png"
+        alt=""
         aria-hidden="true"
-        className="splash-mascot"
-      >
-        <circle cx="32" cy="32" r="30" fill="#1F2A27" />
-        <circle cx="20" cy="17" r="6.5" fill="#66C2A3" />
-        <circle cx="44" cy="17" r="6.5" fill="#66C2A3" />
-        <path
-          d="M18 44 L18 32 L26 40 L32 28 L38 40 L46 32 L46 44"
-          fill="none"
-          stroke="#66C2A3"
-          strokeWidth="5.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M25 52 l5 5 L41 45"
-          fill="none"
-          stroke="#E8EFEA"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          pathLength={1}
-          className="splash-check"
-        />
-      </svg>
+        width={88}
+        height={88}
+        className="splash-mascot h-[88px] w-[88px] rounded-[22px] object-contain"
+      />
       <div className="flex flex-col items-center gap-1">
         <span
           className="text-[22px] font-extrabold tracking-tight"

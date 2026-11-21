@@ -44,7 +44,7 @@ export function DonutChart({
   };
 
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-col items-center gap-4 sm:flex-row">
       <div className="relative flex-none" style={{ width: size, height: size }}>
         <svg
           width={size}
@@ -105,7 +105,7 @@ export function DonutChart({
           ))}
         </ul>
       </div>
-      <ul className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <ul className="flex w-full min-w-0 flex-1 flex-col gap-1.5">
         {slices.map((slice, index) => (
           <li key={slice.id}>
             <button

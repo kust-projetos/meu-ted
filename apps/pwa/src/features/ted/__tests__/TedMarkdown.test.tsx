@@ -874,7 +874,10 @@ describe("R05 — integração no bubble (usuário literal, assistente markdown)
       />,
     );
 
-    expect(container.querySelectorAll("img,script,a")).toHaveLength(0);
+    expect(container.querySelectorAll("script,a")).toHaveLength(0);
+    const bubble = container.querySelector('[data-testid="ted-message-bubble"]');
+    expect(bubble).not.toBeNull();
+    expect(bubble!.querySelectorAll("img,script,a")).toHaveLength(0);
     expect(container.textContent).toContain("[clique](javascript:alert(2))");
   });
 

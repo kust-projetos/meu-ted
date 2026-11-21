@@ -108,12 +108,10 @@ describe("HomePage editorial composition", () => {
     vi.clearAllMocks();
     window.localStorage.removeItem("meu-ted:hide-balance");
   });
-  it("renders greeting, status, balance visibility and a single monthly statement", async () => {
+  it("renders profile name, status, balance visibility and a single monthly statement", async () => {
     const user = userEvent.setup();
     render(<HomePage />);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      /Bom dia|Boa tarde|Boa noite/,
-    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Visitante");
     expect(
       screen.getByText(/Tudo em dia\.|\d+ em atraso|\d+ para hoje|\d+ nos próximos dias/),
     ).toBeInTheDocument();
@@ -124,11 +122,13 @@ describe("HomePage editorial composition", () => {
     expect(
       screen.getByRole("button", { name: "Mostrar saldos" }),
     ).toHaveAttribute("aria-pressed", "true");
-    expect(document.querySelectorAll(".statement-sheen")).toHaveLength(1);
-    expect(screen.getByText("Receitas")).toBeInTheDocument();
-    expect(screen.getByText("Despesas")).toBeInTheDocument();
-    expect(screen.getByText("Resultado do mês")).toBeInTheDocument();
-    expect(screen.getByText(/% das receitas/)).toBeInTheDocument();
+    const statements = document.querySelectorAll(".statement-sheen");
+    expect(statements).toHaveLength(1);
+    const statementScope = within(statements[0] as HTMLElement);
+    expect(statementScope.getByText("Receitas")).toBeInTheDocument();
+    expect(statementScope.getByText("Despesas")).toBeInTheDocument();
+    expect(statementScope.getByText("Resultado do mês")).toBeInTheDocument();
+    expect(statementScope.getByText(/% das receitas/)).toBeInTheDocument();
   });
   it("omits the savings rate when income is zero", () => {
     vi.spyOn(appStateModule, "useAppState").mockReturnValue({
@@ -178,7 +178,8 @@ describe("HomePage editorial composition", () => {
     await user.click(screen.getByRole("button", { name: "Adicionar cartão" }));
     expect(mockRouter.push).toHaveBeenCalledWith("/hub/patrimonio?aba=cartoes");
   });
-  it("shows danger attention for an overdue pending payable", () => {
+  it("shows danger attention for an overdue pending payable", async () => {
+    const user = userEvent.setup();
     const y = new Date();
     y.setDate(y.getDate() - 2);
     const dueDate = y.toISOString().slice(0, 10);
@@ -196,6 +197,10 @@ describe("HomePage editorial composition", () => {
       cardStatements: [],
     } as AppState);
     render(<HomePage />);
+    const toggleButton = screen.getByRole("button", { name: /1 em atraso/ });
+    expect(toggleButton).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggleButton);
+    expect(toggleButton).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByRole("button", { name: /Internet vencida/ }).className,
     ).toContain("attention-danger");
@@ -213,6 +218,22 @@ describe("HomePage editorial composition", () => {
         name: "Itens que precisam de atenção",
       }),
     ).not.toBeInTheDocument();
+  });
+  it("opens the floating navigation menu and closes on Escape", async () => {
+    const user = userEvent.setup();
+    render(<HomePage />);
+    const menuTrigger = screen.getByRole("button", { name: "Abrir menu" });
+    expect(menuTrigger).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(menuTrigger);
+    expect(menuTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: /Explorar todos os módulos/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Alternar tema" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Personalizar início" }).length).toBeGreaterThanOrEqual(2);
+
+    await user.keyboard("{Escape}");
+    expect(menuTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: /Explorar todos os módulos/ })).not.toBeInTheDocument();
   });
   it("renders account ledger and bank marks", () => {
     vi.spyOn(appStateModule, "useAppState").mockReturnValue({
@@ -232,7 +253,7 @@ describe("HomePage editorial composition", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByRole("img").length).toBeGreaterThan(0);
   });
-  it("renders a single featured card with remaining cards in a ledger", () => {
+  it("renders all credit cards in a unified list with total invoice footer", () => {
     const cards = [
       {
         id: "c1",
@@ -263,18 +284,123 @@ describe("HomePage editorial composition", () => {
     const { container } = render(<HomePage />);
     expect(
       container.querySelectorAll('[data-testid="bank-card"]'),
-    ).toHaveLength(1);
-    expect(
-      screen.getByRole("list", { name: "Outros cartões" }),
-    ).toBeInTheDocument();
+    ).toHaveLength(0);
+    const cardList = screen.getByRole("list", { name: "Cartões conectados" });
+    expect(cardList).toBeInTheDocument();
+    expect(within(cardList).getByText("Nu principal")).toBeInTheDocument();
+    expect(within(cardList).getByText("Nu secundário")).toBeInTheDocument();
+    expect(screen.getByText(/Total em faturas \(2 cartões\)/)).toBeInTheDocument();
   });
-  it("renders proportion accessible summary and TED insight action", () => {
+  it("renders GoalsAndBudgetsCard with Orçamentos and Metas tabs", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(appStateModule, "useAppState").mockReturnValue(defaultState());
+    render(<HomePage />);
+
+    const group = screen.getByRole("group", { name: "Metas e orçamentos" });
+    expect(group).toBeInTheDocument();
+    expect(screen.getByText("Ver todos os orçamentos")).toBeInTheDocument();
+    expect(
+      within(group.closest("section") as HTMLElement).getByText("Alimentação"),
+    ).toBeInTheDocument();
+
+    await user.click(within(group).getByRole("button", { name: /Metas/ }));
+    expect(screen.getByText("Reserva de emergência")).toBeInTheDocument();
+    expect(screen.getByText("Ver todas as metas")).toBeInTheDocument();
+  });
+  it("renders proportion accessible summary and TED guidance action", () => {
     vi.spyOn(appStateModule, "useAppState").mockReturnValue(defaultState());
     render(<HomePage />);
     expect(
       screen.getByRole("img", { name: /Proporção por categoria/ }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "TED" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Perguntar ao TED/ }),
+    ).toBeInTheDocument();
+  });
+  it("renders recent transactions, AI guidance, expense/income category tabs, active-only monthly comparison, and global privacy masking", async () => {
+    const user = userEvent.setup();
+    const today = new Date();
+    const ymCurrent = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    const prevDate = new Date(today.getFullYear(), today.getMonth() - 2, 10);
+    const ymTwoMonthsAgo = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+
+    vi.spyOn(appStateModule, "useAppState").mockReturnValue({
+      ...defaultState(),
+      transactions: [
+        {
+          id: "tx-cur-exp",
+          description: "Mercado Central",
+          amountCents: 25000,
+          date: `${ymCurrent}-09`,
+          kind: "expense",
+          categoryId: "cat1",
+          accountId: "acc1",
+        },
+        {
+          id: "tx-cur-inc",
+          description: "Consultoria Especial",
+          amountCents: 310000,
+          date: `${ymCurrent}-07`,
+          kind: "income",
+          categoryId: "cat6",
+          accountId: "acc1",
+        },
+        {
+          id: "tx-old-inc",
+          description: "Bônus Anterior",
+          amountCents: 180000,
+          date: `${ymTwoMonthsAgo}-05`,
+          kind: "income",
+          categoryId: "cat5",
+          accountId: "acc1",
+        },
+      ],
+      quickInsights: [
+        {
+          id: "qi-1",
+          title: "Economia consistente",
+          body: "Você reduziu custos variáveis neste mês.",
+          severity: "good",
+        },
+      ],
+    } as AppState);
+
+    render(<HomePage />);
+
+    // Últimos lançamentos
+    const recentList = screen.getByRole("list", { name: "Últimos lançamentos" });
+    expect(within(recentList).getByText("Mercado Central")).toBeInTheDocument();
+    expect(within(recentList).getByText("Consultoria Especial")).toBeInTheDocument();
+
+    // Orientações do TED baseadas nos registros
+    expect(
+      screen.getByRole("region", { name: "Orientações do TED" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Economia consistente")).toBeInTheDocument();
+
+    // Categorias separadas por Despesas e Receitas
+    expect(
+      screen.getByRole("img", { name: /Alimentação: 100%/ }),
+    ).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("group", { name: "Tipo de categoria" })).getByRole(
+        "button",
+        { name: /Receitas/ },
+      ),
+    );
+    expect(
+      screen.getByRole("img", { name: /Freelas: 100%/ }),
+    ).toBeInTheDocument();
+
+    // Comparativo mensal inicia apenas nos meses que possuem registro (pula o mês vazio intermediário)
+    const comparisonGroup = screen.getByRole("group", {
+      name: "Comparativo mensal de receitas e despesas",
+    });
+    expect(within(comparisonGroup).getAllByRole("button")).toHaveLength(2);
+
+    // Ocultar saldos mascara os valores da Home inteira
+    await user.click(screen.getByRole("button", { name: "Ocultar saldos" }));
+    expect(screen.getAllByText("••••").length).toBeGreaterThan(3);
   });
   it("keeps the removed duplicated dashboard stack absent", () => {
     const { container } = render(<HomePage />);

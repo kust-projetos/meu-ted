@@ -74,23 +74,29 @@ export function KpiCard({
         </span>
       </span>
       <span className={`break-words text-[20px] font-bold tabular-nums tracking-tight ${isNegativeValue ? "text-danger" : "text-text-primary"}`}>{value}</span>
-      <span className="flex items-center justify-between gap-2">
-        <span className={`text-[11px] font-bold ${trendColor}`}>
-          {deltaText ?? "—"}
+      {(deltaText || sparkPoints) && (
+        <span className="flex items-center justify-between gap-2">
+          {deltaText ? (
+            <span className={`text-[11px] font-bold ${trendColor}`}>
+              {deltaText}
+            </span>
+          ) : (
+            <span />
+          )}
+          {sparkPoints && (
+            <svg viewBox="0 0 100 32" className="h-6 w-16 flex-none" aria-hidden="true">
+              <polyline
+                points={sparkPoints}
+                fill="none"
+                stroke="var(--primary)"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
         </span>
-        {sparkPoints && (
-          <svg viewBox="0 0 100 32" className="h-6 w-16 flex-none" aria-hidden="true">
-            <polyline
-              points={sparkPoints}
-              fill="none"
-              stroke="var(--primary)"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
-      </span>
+      )}
       {hint && <span className="text-[10px] font-medium leading-snug text-text-muted">{hint}</span>}
       {progress && progressClamped !== null && (
         <div

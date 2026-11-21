@@ -99,6 +99,258 @@
     "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution or network."
   },
   {
+    "slug": "itau",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/60701190.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "bradesco",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/60746948.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "santander",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/90400888.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "banco-do-brasil",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/00000000.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "caixa",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/00360305.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "c6-bank",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/31872495.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "inter",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/00416968.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "xp",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/33264668.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "pagbank",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/08561701.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "stone",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/16501555.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "sicoob",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/02038232.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "sicredi",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/01181521.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "safra",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/58160789.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "original",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/92894922.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "neon",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/20855875.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "agibank",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/10664513.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "btg-pactual",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/30306294.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "banrisul",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/92702067.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "brb",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/00000208.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "banco-pan",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/59285411.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "asaas",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/19540550.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "efi",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/09089356.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "cielo",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/01027058.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "infinitepay",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/18189547.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "recargapay",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/11275560.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "mercado-bitcoin",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/11351086.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "iugu",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/15111975.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
+    "slug": "getnet",
+    "category": "institutions",
+    "sourceUrl": "https://raw.githubusercontent.com/rzmt/logos-bancos-br/main/logos/svg/10440482.svg",
+    "package": "open-finance-brasil / rzmt/logos-bancos-br",
+    "license": "Nominative trademark use (Open Finance Brasil public directory)",
+    "retrievalDate": "2026-11-20",
+    "trademarkNote": "The mark belongs to its owner and is used nominatively to identify the institution."
+  },
+  {
     "slug": "americanexpress",
     "category": "networks",
     "sourceUrl": "https://cdn.jsdelivr.net/npm/simple-icons@15/icons/americanexpress.svg",

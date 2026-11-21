@@ -12,6 +12,10 @@ import {
   Wallet,
 } from "lucide-react";
 import { CategoryBadge } from "@/components/ui/CategoryBadge";
+import { InstitutionMark } from "@/components/brand/InstitutionMark";
+import { useWorkspaceSafe } from "@/lib/auth/workspace-context";
+import { resolveAccountPresentation, useAccountAppearance } from "@/lib/institutions/appearance-store";
+import { normalize } from "@/lib/institutions/catalog";
 import BottomSheet from "./BottomSheet";
 import { useFormDirtySafe } from "@/lib/unsaved-changes";
 import type { Account, Category } from "@/lib/state/types";
@@ -165,6 +169,10 @@ export default function NewTransactionSheet({
   recentCategoryIds = [],
 }: NewTransactionSheetProps) {
   const { markDirty, markClean } = useFormDirtySafe();
+  const workspaceId = useWorkspaceSafe()?.activeWorkspace?.id ?? "default";
+  const appearance = useAccountAppearance(workspaceId);
+  const appearanceFor = (accId: string, accName: string) =>
+    appearance.map[accId] ?? Object.entries(appearance.map).find(([key]) => normalize(key) === normalize(accName))?.[1];
   const [tab, setTab] = useState<SheetTab>(initialTab);
   const draftsRef = useRef<Partial<Record<SheetTab, Draft>>>({});
   const [amountDisplay, setAmountDisplay] = useState("");
@@ -722,9 +730,20 @@ export default function NewTransactionSheet({
             className="mt-2 flex w-full items-center justify-between rounded-[13px] border border-border bg-surface px-3.5 py-2.5 text-left transition-colors focus:border-primary"
           >
             <span className="flex min-w-0 items-center gap-2.5">
-              <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] bg-fill-light text-text-secondary">
-                {originKind === "card" ? <CreditCard size={16} /> : <Wallet size={16} />}
-              </span>
+              {selectedOrigin ? (() => {
+                const { institution } = resolveAccountPresentation(selectedOrigin, appearanceFor(selectedOrigin.id, selectedOrigin.name));
+                return selectedOrigin.kind === "cash" && !institution ? (
+                  <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] bg-fill-light text-text-secondary">
+                    <Wallet size={16} />
+                  </span>
+                ) : (
+                  <InstitutionMark institution={institution} size="sm" />
+                );
+              })() : (
+                <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[9px] bg-fill-light text-text-secondary">
+                  {originKind === "card" ? <CreditCard size={16} /> : <Wallet size={16} />}
+                </span>
+              )}
               <span className="min-w-0">
                 <span className={`block truncate text-[15px] ${selectedOrigin ? "font-semibold text-text-primary" : "text-text-muted"}`}>
                   {selectedOrigin?.name ?? "Selecionar"}
@@ -974,8 +993,7 @@ export default function NewTransactionSheet({
             <div className="mb-3 flex flex-wrap gap-[7px]">
               {filteredAccounts.map((acc) => {
                 const selected = fromAccountId === acc.id;
-                const color = acc.color ?? "#4A5568";
-                const short = acc.name.slice(0, 2).toUpperCase();
+                const { institution } = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name));
                 return (
                   <button
                     key={acc.id}
@@ -985,11 +1003,14 @@ export default function NewTransactionSheet({
                     }
                     className={`flex items-center gap-2 rounded-[100px] px-3.5 py-2 text-[12px] font-bold transition-colors ${selected ? "bg-primary text-white" : "bg-fill-light text-text-secondary"}`}
                   >
-                    <span
-                      className="flex h-[18px] w-[18px] items-center justify-center rounded-[5px] font-mono text-[8px] font-bold"
-                      style={{ background: color, color: "#fff" }}
-                    >
-                      {short}
+                    <span aria-hidden="true" className="contents">
+                      {acc.kind === "cash" && !institution ? (
+                        <span className="flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-surface-1 text-text-secondary">
+                          <Wallet size={11} />
+                        </span>
+                      ) : (
+                        <InstitutionMark institution={institution} size="sm" className="!h-[18px] !w-[18px] !rounded-[5px] text-[8px]" />
+                      )}
                     </span>
                     {acc.name}
                   </button>
@@ -1007,8 +1028,7 @@ export default function NewTransactionSheet({
             <div className="flex flex-wrap gap-[7px]">
               {filteredAccounts.map((acc) => {
                 const selected = toAccountId === acc.id;
-                const color = acc.color ?? "#4A5568";
-                const short = acc.name.slice(0, 2).toUpperCase();
+                const { institution } = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name));
                 return (
                   <button
                     key={acc.id}
@@ -1018,11 +1038,14 @@ export default function NewTransactionSheet({
                     }
                     className={`flex items-center gap-2 rounded-[100px] px-3.5 py-2 text-[12px] font-bold transition-colors ${selected ? "bg-primary text-white" : "bg-fill-light text-text-secondary"}`}
                   >
-                    <span
-                      className="flex h-[18px] w-[18px] items-center justify-center rounded-[5px] font-mono text-[8px] font-bold"
-                      style={{ background: color, color: "#fff" }}
-                    >
-                      {short}
+                    <span aria-hidden="true" className="contents">
+                      {acc.kind === "cash" && !institution ? (
+                        <span className="flex h-[18px] w-[18px] items-center justify-center rounded-[5px] bg-surface-1 text-text-secondary">
+                          <Wallet size={11} />
+                        </span>
+                      ) : (
+                        <InstitutionMark institution={institution} size="sm" className="!h-[18px] !w-[18px] !rounded-[5px] text-[8px]" />
+                      )}
                     </span>
                     {acc.name}
                   </button>
@@ -1339,9 +1362,16 @@ export default function NewTransactionSheet({
                     selected ? "border-primary bg-primary/5" : "border-border-subtle"
                   }`}
                 >
-                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[10px] bg-fill-light text-text-secondary">
-                    {acc.kind === "credit_card" ? <CreditCard size={17} /> : <Wallet size={17} />}
-                  </span>
+                  {(() => {
+                    const { institution } = resolveAccountPresentation(acc, appearanceFor(acc.id, acc.name));
+                    return acc.kind === "cash" && !institution ? (
+                      <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[10px] bg-fill-light text-text-secondary">
+                        <Wallet size={17} />
+                      </span>
+                    ) : (
+                      <InstitutionMark institution={institution} size="sm" />
+                    );
+                  })()}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-bold text-text-primary">
                       {acc.name}

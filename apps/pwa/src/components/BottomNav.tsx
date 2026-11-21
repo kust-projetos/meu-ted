@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeftRight,
   CreditCard,
   BarChart3,
   Home,
   Receipt,
-  ReceiptText,
   TrendingDown,
   TrendingUp,
   X,
@@ -37,7 +35,7 @@ const ITEMS: ItemDef[] = [
   { key: "reports", label: "Relatórios", Icon: BarChart3 },
 ];
 
-type QuickActionKind = "expense" | "income" | "transfer" | "receipt";
+type QuickActionKind = "expense" | "income" | "transfer";
 
 interface QuickActionDef {
   key: QuickActionKind;
@@ -49,7 +47,6 @@ const QUICK_ACTIONS: QuickActionDef[] = [
   { key: "expense", label: "Despesa", Icon: TrendingDown },
   { key: "income", label: "Receita", Icon: TrendingUp },
   { key: "transfer", label: "Transferência", Icon: ArrowLeftRight },
-  { key: "receipt", label: "Ler Comprovante", Icon: ReceiptText },
 ];
 
 function NavButton({
@@ -69,7 +66,7 @@ function NavButton({
         onClick();
       }}
       aria-current={isActive ? "page" : undefined}
-      className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-[16px] px-1 pt-1.5 transition-all duration-200 focus-visible:outline-none ${
+      className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 my-1.5 rounded-[14px] px-1 py-1 transition-all duration-200 focus-visible:outline-none ${
         isActive ? "bg-primary-tint" : "bg-transparent"
       }`}
       style={{
@@ -101,7 +98,6 @@ export function BottomNav({
   active,
   onNavClick,
 }: BottomNavProps) {
-  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const fabRef = useRef<HTMLButtonElement>(null);
 
@@ -122,11 +118,6 @@ export function BottomNav({
   function runQuickAction(action: QuickActionKind) {
     setMenuOpen(false);
     haptic(8);
-    if (action === "receipt") {
-      // Direciona leitura de comprovante para o assistente TED com contexto.
-      router.push("/ted?from=comprovante");
-      return;
-    }
     // Reuses the capture (preselected) sheet mode via the AppShell listener.
     window.dispatchEvent(
       new CustomEvent("pwa:open-tx", { detail: { kind: action } }),
@@ -136,7 +127,7 @@ export function BottomNav({
   return (
     <nav
       data-nav="bottom"
-      className="fixed bottom-0 inset-x-0 z-20 mx-auto flex max-w-[var(--shell-max-w)] items-stretch justify-around border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className="fixed bottom-0 inset-x-0 z-20 mx-auto flex max-w-[var(--shell-max-w)] items-stretch justify-around border-t border-border bg-surface/95 px-1.5 backdrop-blur-md pb-[env(safe-area-inset-bottom)] lg:hidden"
       style={{ height: "var(--tab-bar-height)" }}
     >
       {/* Items: left side (Início, Extrato) */}

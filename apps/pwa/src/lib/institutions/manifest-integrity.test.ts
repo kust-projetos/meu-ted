@@ -12,8 +12,8 @@ const manifest = JSON.parse(
 describe("institution catalog asset integrity", () => {
   it("gives each new monogram-only institution a distinct high-contrast assigned color", () => {
     const monogramOnlyIds = [
-      "asaas", "pagar-me", "efi", "iugu", "cielo",
-      "rede", "getnet", "infinitepay", "recargapay", "99pay",
+      "pagar-me", "rede", "99pay", "next", "iti",
+      "will-bank", "porto-seguro", "avenue", "cooperforte",
     ];
     const colors = monogramOnlyIds.map((id) => INSTITUTIONS.find((item) => item.id === id)!.colors.primary);
     expect(new Set(colors).size).toBe(monogramOnlyIds.length);
@@ -27,11 +27,18 @@ describe("institution catalog asset integrity", () => {
     }
   });
 
-  it("resolves every catalog logo in code, public assets, and the manifest", () => {
+  it("resolves every catalog logo in public assets and the manifest", () => {
+    const catalogLogos = new Set<string>();
     for (const institution of INSTITUTIONS) {
       if (!institution.logoSrc) continue;
+      catalogLogos.add(institution.logoSrc);
       const slug = institution.logoSrc.split("/").at(-1)!.replace(/\.svg$/, "");
-      expect(institutionSvg).toHaveProperty(institution.logoSrc);
+      expect(existsSync(resolve(publicDir, "institutions", `${slug}.svg`))).toBe(true);
+      expect(manifest.some((entry) => entry.slug === slug && entry.category === "institutions")).toBe(true);
+    }
+    for (const logoPath of Object.keys(institutionSvg)) {
+      const slug = logoPath.split("/").at(-1)!.replace(/\.svg$/, "");
+      expect(catalogLogos.has(logoPath)).toBe(true);
       expect(existsSync(resolve(publicDir, "institutions", `${slug}.svg`))).toBe(true);
       expect(manifest.some((entry) => entry.slug === slug && entry.category === "institutions")).toBe(true);
     }
