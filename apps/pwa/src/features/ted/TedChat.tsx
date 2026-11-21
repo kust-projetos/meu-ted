@@ -35,7 +35,6 @@ import { AppFloatingMenu } from "@/components/AppFloatingMenu";
 import { Sparkles, Send, RefreshCw, Lock, X } from "lucide-react";
 
 const HISTORY_LOAD_ERROR = "Não foi possível carregar o histórico. Tente novamente.";
-const ACTIVE_LOAD_ERROR = "Não foi possível carregar as aprovações agora.";
 const MESSAGE_SEND_ERROR = "Não foi possível enviar a mensagem. Tente novamente.";
 /**
  * P3 recovery: the turn succeeded but the broker call was lost. The original
@@ -567,13 +566,12 @@ export function TedChat({ focusedOperationId = null }: TedChatProps) {
       if (!silent) setStatus("ready");
     } catch {
       if (isStaleScope(scopeId)) return [];
-      // Fail closed on first load (no cards invented) and honest afterwards:
-      // last-known cards stay (untouched), staleness is signaled, history is
-      // untouched.
-      if (!silent) {
-        setError(ACTIVE_LOAD_ERROR);
-        setStatus("ready");
-      }
+      // ADR-033: o agente confirma e executa sozinho, então a lista active é
+      // apenas uma fonte de reidratação de cards. Se a RPC falhar, degradamos
+      // em silêncio — nenhum banner de erro, nenhum card inventado, cards
+      // conhecidos intactos. A reidratação volta a acontecer normalmente
+      // quando a RPC responde (sem travar o status no estado "connecting").
+      if (!silent) setStatus("ready");
     }
     // debt-undo-proposal-rehydration: reload/remount rehydrates the live undo
     // cards from the authenticated active-list RPC (bound summaries only).

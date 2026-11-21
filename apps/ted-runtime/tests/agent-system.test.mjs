@@ -35,6 +35,23 @@ describe('TED product system prompt', () => {
     assert.doesNotMatch(TED_AGENT_SYSTEM_PROMPT, /(?:propose_category_(?:update|fix)|correct_category)/i);
   });
 
+  it('includes structured-response formatting guidance and keeps the safeguards intact', () => {
+    for (const text of [
+      /FORMATO DAS RESPOSTAS/i, /markdown simples/i,
+      /linha curta/i, /resultado/i, /✅ Registrei a despesa/,
+      /lista curta com marcadores/i, /rótulo em negrito/i,
+      /\*\*Valor\*\*/, /\*\*Conta\/Cartão\*\*/, /\*\*Categoria\*\*/, /\*\*Data\*\*/, /\*\*Forma\*\*/,
+      /Separe os blocos com uma linha em branco/i,
+      /no máximo uma pergunta final curta/i, /parágrafo próprio/i,
+      /frase curta seguida das opções em lista/i,
+      /emoji isolado em uma linha/i, /nunca repita dados/i, /pt-BR/i,
+    ]) assert.match(TED_AGENT_SYSTEM_PROMPT, text);
+    for (const safeguard of [
+      /REGRA DE OURO/i, /nunca confirma nem executa/i, /assurance/i,
+      /Nunca peça senhas/i, /Nunca mostre IDs técnicos/i, /Nunca invente números/i,
+    ]) assert.match(TED_AGENT_SYSTEM_PROMPT, safeguard);
+  });
+
   it('gates system prompt injection without changing the default config', () => {
     const expected = tedConfig('test');
     assert.equal(JSON.stringify(tedConfig('test', { productPrompt: false })), JSON.stringify(expected));
